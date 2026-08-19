@@ -189,6 +189,23 @@
     <button class="gear" id="btn-settings">⚙</button>
   </header>
 
+  <!-- PASSWORD MODAL -->
+  <div id="pw-modal" style="display:none; position:fixed; inset:0; background:rgba(16,16,18,0.75); z-index:100; align-items:center; justify-content:center; padding:20px;">
+    <div style="background:var(--card); border:1px solid var(--line); border-radius:16px; padding:22px; width:100%; max-width:320px;">
+      <div class="step-label">Acceso restringido</div>
+      <div class="step-title" style="font-size:18px; margin-bottom:14px;">Ingresa la contraseña</div>
+      <div class="setup-field">
+        <label>Contraseña</label>
+        <input id="input-pw" type="password" inputmode="numeric" placeholder="••••" autocomplete="off">
+      </div>
+      <div id="pw-error" style="display:none; color:var(--danger); font-size:12.5px; margin-bottom:8px;">Contraseña incorrecta</div>
+      <div class="actions" style="margin-top:4px;">
+        <button class="btn btn-ghost" id="btn-pw-cancel">Cancelar</button>
+        <button class="btn btn-primary" id="btn-pw-submit">Entrar</button>
+      </div>
+    </div>
+  </div>
+
   <main>
 
     <!-- MAIN CAPTURE SCREEN -->
@@ -308,11 +325,37 @@ function renderGallery(){
   });
 }
 
+const SETTINGS_PASSWORD = '9999';
+
 document.getElementById('btn-settings').addEventListener('click', ()=>{
-  document.getElementById('input-sb-url').value = sbConfig.url;
-  document.getElementById('input-sb-key').value = sbConfig.key;
-  document.getElementById('input-sb-bucket').value = sbConfig.bucket;
-  show('settings');
+  document.getElementById('input-pw').value = '';
+  document.getElementById('pw-error').style.display = 'none';
+  document.getElementById('pw-modal').style.display = 'flex';
+  document.getElementById('input-pw').focus();
+});
+
+document.getElementById('btn-pw-cancel').addEventListener('click', ()=>{
+  document.getElementById('pw-modal').style.display = 'none';
+});
+
+function trySettingsPassword(){
+  const val = document.getElementById('input-pw').value;
+  if(val === SETTINGS_PASSWORD){
+    document.getElementById('pw-modal').style.display = 'none';
+    document.getElementById('input-sb-url').value = sbConfig.url;
+    document.getElementById('input-sb-key').value = sbConfig.key;
+    document.getElementById('input-sb-bucket').value = sbConfig.bucket;
+    show('settings');
+  }else{
+    document.getElementById('pw-error').style.display = 'block';
+    document.getElementById('input-pw').value = '';
+    document.getElementById('input-pw').focus();
+  }
+}
+
+document.getElementById('btn-pw-submit').addEventListener('click', trySettingsPassword);
+document.getElementById('input-pw').addEventListener('keydown', (e)=>{
+  if(e.key === 'Enter') trySettingsPassword();
 });
 document.getElementById('btn-back-from-settings').addEventListener('click', ()=> show('main'));
 
