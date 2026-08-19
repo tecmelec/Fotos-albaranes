@@ -1,7 +1,7 @@
 {
-  "name": "Disparo - Fotos a Supabase",
-  "short_name": "Disparo",
-  "description": "Toma una foto y guárdala automáticamente en Supabase",
+  "name": "Alb. Tecmelec - Fotos a Supabase",
+  "short_name": "Alb. Tecmelec",
+  "description": "Toma una foto con marca de agua y guárdala automáticamente en Supabase",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
