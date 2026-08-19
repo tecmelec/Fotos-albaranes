@@ -372,7 +372,7 @@ async function resolveLocationLabel(){
     if(!res.ok) return coordsText;
     const data = await res.json();
     if(data && data.display_name){
-      const parts = data.display_name.split(',').slice(0,3).join(',').trim();
+      const parts = data.display_name.split(',').slice(0,2).join(',').trim();
       return parts || coordsText;
     }
     return coordsText;
@@ -422,6 +422,21 @@ function loadImageFromFile(file){
   });
 }
 
+function truncateToWidth(ctx, text, maxWidth){
+  if(ctx.measureText(text).width <= maxWidth) return text;
+  let low = 0, high = text.length;
+  while(low < high){
+    const mid = Math.ceil((low + high) / 2);
+    const candidate = text.slice(0, mid) + '…';
+    if(ctx.measureText(candidate).width <= maxWidth){
+      low = mid;
+    }else{
+      high = mid - 1;
+    }
+  }
+  return low > 0 ? text.slice(0, low) + '…' : '…';
+}
+
 async function addWatermark(file){
   const img = await loadImageFromFile(file);
   const canvas = document.createElement('canvas');
@@ -435,20 +450,25 @@ async function addWatermark(file){
   const timeStr = now.toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
   const line1 = `${dateStr}  ${timeStr}`;
   const locationLabel = await resolveLocationLabel();
-  const lines = locationLabel ? [line1, `📍 ${locationLabel}`] : [line1];
+  const rawLines = locationLabel ? [line1, `📍 ${locationLabel}`] : [line1];
 
-  const fontSize = Math.max(20, Math.round(canvas.width * 0.032));
-  const lineGap = fontSize * 0.35;
+  const fontSize = Math.max(20, Math.round(canvas.width * 0.028));
   ctx.font = `600 ${fontSize}px -apple-system, sans-serif`;
 
+  const sideMargin = fontSize * 0.6;
   const paddingX = fontSize * 0.9;
   const paddingY = fontSize * 0.55;
-  const textWidth = Math.max(...lines.map(l => ctx.measureText(l).width));
-  const boxWidth = textWidth + paddingX * 2;
+  const maxBoxWidth = canvas.width - sideMargin * 2;
+  const maxTextWidth = Math.max(20, maxBoxWidth - paddingX * 2);
+
+  const lines = rawLines.map(l => truncateToWidth(ctx, l, maxTextWidth));
+
+  const textWidth = Math.min(maxTextWidth, Math.max(...lines.map(l => ctx.measureText(l).width)));
+  const boxWidth = Math.min(maxBoxWidth, textWidth + paddingX * 2);
   const lineHeight = fontSize * 1.2;
   const boxHeight = lines.length * lineHeight + paddingY * 2 - (lineHeight - fontSize);
-  const boxX = canvas.width - boxWidth - fontSize * 0.6;
-  const boxY = canvas.height - boxHeight - fontSize * 0.6;
+  const boxX = Math.max(sideMargin, canvas.width - boxWidth - sideMargin);
+  const boxY = canvas.height - boxHeight - sideMargin;
 
   ctx.fillStyle = 'rgba(16,16,18,0.55)';
   ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
