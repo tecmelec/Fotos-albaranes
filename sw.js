@@ -36,3 +36,39 @@ self.addEventListener('fetch', (event) => {
       .catch(() => caches.match(event.request))
   );
 });
+
+// Best-effort reminder check for Android/Chrome installs that grant
+// periodic background sync. Not supported on iOS Safari; the app also
+// checks the schedule every minute while open, which covers most cases.
+const REMINDER_MESSAGE = '📸 ¡No te olvides! Envía las fotos de los albaranes recibidos hoy y déjalo todo al día. 😊 ¡Gracias!';
+const REMINDER_SCHEDULE = [
+  { days:[1,2,3,4], hour:16, minute:0 },
+  { days:[5], hour:12, minute:0 }
+];
+
+self.addEventListener('periodicsync', (event) => {
+  if(event.tag === 'albaranes-reminder'){
+    event.waitUntil(checkAndNotify());
+  }
+});
+
+async function checkAndNotify(){
+  const now = new Date();
+  const day = now.getDay();
+  const minutesNow = now.getHours() * 60 + now.getMinutes();
+  const match = REMINDER_SCHEDULE.find(r => r.days.includes(day) && minutesNow >= (r.hour * 60 + r.minute));
+  if(!match) return;
+
+  const cache = await caches.open(CACHE_NAME);
+  const key = `sw-reminder-${now.toDateString()}`;
+  const already = await cache.match(key);
+  if(already) return;
+  await cache.put(key, new Response('sent'));
+
+  await self.registration.showNotification('Alb. Tecmelec', {
+    body: REMINDER_MESSAGE,
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    tag: 'albaranes-reminder'
+  });
+}
