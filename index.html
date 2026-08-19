@@ -220,6 +220,7 @@
       </div>
 
       <div class="hint" id="main-hint">Toca el disparador para tomar la foto</div>
+      <div class="hint" id="location-status" style="display:none; margin-top:4px;"></div>
 
       <div class="gallery-label" id="gallery-label" style="display:none;">Últimas guardadas</div>
       <div class="gallery" id="gallery"></div>
@@ -346,18 +347,38 @@ document.getElementById('camera-input').addEventListener('change', (e)=>{
   document.getElementById('main-hint').innerHTML = '✕ repetir &nbsp;·&nbsp; ✓ guardar en Supabase';
 
   currentLocation = null;
+  document.getElementById('location-status').style.display = 'none';
   requestLocation();
 });
 
 function requestLocation(){
-  if(!navigator.geolocation){ return; }
+  if(!navigator.geolocation){
+    showLocationStatus('Este navegador no soporta ubicación', true);
+    return;
+  }
+  showLocationStatus('Obteniendo ubicación…', false);
   navigator.geolocation.getCurrentPosition(
     (pos)=>{
       currentLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      showLocationStatus('📍 Ubicación lista', false);
     },
-    ()=>{ currentLocation = null; },
-    { enableHighAccuracy:true, timeout:8000, maximumAge:60000 }
+    (err)=>{
+      currentLocation = null;
+      let msg = 'Ubicación no disponible';
+      if(err && err.code === 1) msg = 'Permiso de ubicación bloqueado — revisa ajustes del sitio';
+      if(err && err.code === 2) msg = 'No se pudo obtener la ubicación (sin señal GPS)';
+      if(err && err.code === 3) msg = 'La ubicación tardó demasiado en responder';
+      showLocationStatus(msg, true);
+    },
+    { enableHighAccuracy:true, timeout:15000, maximumAge:60000 }
   );
+}
+
+function showLocationStatus(text, isWarning){
+  const el = document.getElementById('location-status');
+  el.textContent = text;
+  el.style.color = isWarning ? 'var(--danger)' : 'var(--text-dim)';
+  el.style.display = 'block';
 }
 
 async function resolveLocationLabel(){
