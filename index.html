@@ -348,27 +348,36 @@ document.getElementById('camera-input').addEventListener('change', (e)=>{
 
   currentLocation = null;
   document.getElementById('location-status').style.display = 'none';
+  document.getElementById('btn-confirm').disabled = true;
+  document.getElementById('btn-confirm').style.opacity = '0.4';
   requestLocation();
 });
 
 function requestLocation(){
+  const confirmBtn = document.getElementById('btn-confirm');
   if(!navigator.geolocation){
     showLocationStatus('Este navegador no soporta ubicación', true);
     return;
   }
   showLocationStatus('Obteniendo ubicación…', false);
+  confirmBtn.disabled = true;
+  confirmBtn.style.opacity = '0.4';
   navigator.geolocation.getCurrentPosition(
     (pos)=>{
       currentLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
       showLocationStatus('📍 Ubicación lista', false);
+      confirmBtn.disabled = false;
+      confirmBtn.style.opacity = '1';
     },
     (err)=>{
       currentLocation = null;
-      let msg = 'Ubicación no disponible';
-      if(err && err.code === 1) msg = 'Permiso de ubicación bloqueado — revisa ajustes del sitio';
-      if(err && err.code === 2) msg = 'No se pudo obtener la ubicación (sin señal GPS)';
-      if(err && err.code === 3) msg = 'La ubicación tardó demasiado en responder';
+      let msg = 'Ubicación no disponible — se guardará sin ella';
+      if(err && err.code === 1) msg = 'Permiso de ubicación bloqueado — se guardará sin ella';
+      if(err && err.code === 2) msg = 'Sin señal GPS — se guardará sin ubicación';
+      if(err && err.code === 3) msg = 'Tardó demasiado — se guardará sin ubicación';
       showLocationStatus(msg, true);
+      confirmBtn.disabled = false;
+      confirmBtn.style.opacity = '1';
     },
     { enableHighAccuracy:true, timeout:15000, maximumAge:60000 }
   );
@@ -521,6 +530,9 @@ function resetToShutter(){
   document.getElementById('row-shutter').style.display = 'flex';
   document.getElementById('row-confirm').style.display = 'none';
   document.getElementById('main-hint').textContent = 'Toca el disparador para tomar la foto';
+  document.getElementById('location-status').style.display = 'none';
+  document.getElementById('btn-confirm').disabled = false;
+  document.getElementById('btn-confirm').style.opacity = '1';
 }
 
 async function uploadToSupabase(file, config){
