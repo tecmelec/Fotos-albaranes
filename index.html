@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Disparo · Guardar en Supabase</title>
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#101012">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Disparo">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<style>
+  :root{
+    --bg:#101012;
+    --card:#1a1a1d;
+    --card-2:#212125;
+    --line:#2c2c31;
+    --text:#f2efe9;
+    --text-dim:#8f8d8a;
+    --amber:#e8a94c;
+    --amber-dim:#7a6136;
+    --green:#25d366;
+    --danger:#e8654c;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    display:flex;
+    justify-content:center;
+    min-height:100vh;
+    overflow-x:hidden;
+  }
+  .shell{
+    width:100%;
+    max-width:460px;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    padding:0 20px;
+    padding-top:max(20px, env(safe-area-inset-top));
+    padding-bottom:max(20px, env(safe-area-inset-bottom));
+  }
+
+  header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:18px;
+  }
+  .brand{display:flex; align-items:baseline; gap:8px;}
+  .brand .dot{width:8px;height:8px;border-radius:50%;background:var(--amber);display:inline-block;}
+  .brand h1{font-size:15px;letter-spacing:0.14em;text-transform:uppercase;font-weight:600;margin:0;}
+  .gear{
+    background:none;border:1px solid var(--line);color:var(--text-dim);
+    width:34px;height:34px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    font-size:16px;cursor:pointer;
+  }
+  .gear:active{background:var(--card-2);}
+
+  main{flex:1; display:flex; flex-direction:column;}
+  .screen{display:none; flex-direction:column; flex:1;}
+  .screen.active{display:flex;}
+
+  .viewfinder{
+    position:relative;
+    width:100%;
+    flex:1;
+    min-height:380px;
+    border-radius:18px;
+    background:var(--card);
+    border:1px solid var(--line);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    overflow:hidden;
+    margin-bottom:18px;
+  }
+  .viewfinder img{width:100%;height:100%;object-fit:cover;display:block;}
+  .corner{position:absolute;width:26px;height:26px;border:2px solid var(--amber);opacity:.85;}
+  .corner.tl{top:14px;left:14px;border-right:none;border-bottom:none;border-radius:6px 0 0 0;}
+  .corner.tr{top:14px;right:14px;border-left:none;border-bottom:none;border-radius:0 6px 0 0;}
+  .corner.bl{bottom:14px;left:14px;border-right:none;border-top:none;border-radius:0 0 0 6px;}
+  .corner.br{bottom:14px;right:14px;border-left:none;border-top:none;border-radius:0 0 6px 0;}
+  .placeholder-icon{color:var(--text-dim);font-size:13px;text-align:center;letter-spacing:.05em;}
+
+  .control-row{
+    display:flex; align-items:center; justify-content:center;
+    gap:28px;
+    min-height:96px;
+  }
+  #camera-input{display:none;}
+  .shutter{
+    width:76px;height:76px;border-radius:50%;
+    background:var(--amber);
+    border:5px solid #3a2f1c;
+    box-shadow:0 0 0 2px var(--amber);
+    cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    transition:transform .12s;
+  }
+  .shutter:active{transform:scale(0.92);}
+
+  .round-btn{
+    width:58px;height:58px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    font-size:22px; cursor:pointer; border:none;
+    transition:transform .12s;
+  }
+  .round-btn:active{transform:scale(0.9);}
+  .round-btn.retake{background:var(--card-2); color:var(--text-dim); border:1px solid var(--line);}
+  .round-btn.confirm{background:var(--green); color:#08170d; width:76px; height:76px; font-size:28px;}
+
+  .hint{font-size:12.5px;color:var(--text-dim);line-height:1.5;text-align:center;margin-top:12px;}
+  .hint b{color:var(--text);}
+
+  .step-label{font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px;}
+  .step-title{font-size:24px;font-weight:700;line-height:1.15;margin:0 0 20px 0;letter-spacing:-0.01em;}
+
+  .setup-field{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:12px;}
+  .setup-field label{display:block;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px;}
+  .setup-field input{width:100%;background:transparent;border:none;color:var(--text);font-size:16px;outline:none;font-family:inherit;}
+  .setup-field input::placeholder{color:#55534f;}
+
+  .actions{display:flex;gap:10px;margin-top:16px;}
+  button.btn{
+    flex:1;border:none;border-radius:14px;padding:15px 10px;font-size:14.5px;font-weight:700;
+    letter-spacing:.01em;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;
+  }
+  .btn-primary{background:var(--amber); color:#2a1c05;}
+  .btn-primary:active{filter:brightness(0.92);}
+  .btn-ghost{background:var(--card-2); color:var(--text); border:1px solid var(--line);}
+  .btn-ghost:active{background:var(--card);}
+  .btn-back-link{
+    background:none;border:none;color:var(--text-dim);font-size:13px;
+    margin-bottom:16px;cursor:pointer;padding:0;text-align:left;
+  }
+
+  /* Gallery of saved photos */
+  .gallery-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin:22px 0 10px 0;}
+  .gallery{
+    display:grid;
+    grid-template-columns:repeat(3, 1fr);
+    gap:8px;
+  }
+  .gallery a{
+    display:block;
+    aspect-ratio:1/1;
+    border-radius:10px;
+    overflow:hidden;
+    border:1px solid var(--line);
+  }
+  .gallery img{width:100%;height:100%;object-fit:cover;display:block;}
+
+  .success-badge{
+    display:flex; align-items:center; gap:10px;
+    background:rgba(37,211,102,0.1);
+    border:1px solid rgba(37,211,102,0.35);
+    border-radius:14px;
+    padding:12px 14px;
+    margin-bottom:16px;
+    font-size:13px;
+  }
+  .success-badge .check{
+    width:26px;height:26px;border-radius:50%;
+    background:var(--green); color:#08170d;
+    display:flex;align-items:center;justify-content:center;
+    font-size:14px; flex-shrink:0;
+  }
+  .success-badge a{color:var(--amber); word-break:break-all;}
+
+  .toast{
+    position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+    background:var(--card-2);border:1px solid var(--line);color:var(--text);
+    padding:12px 18px;border-radius:12px;font-size:13px;max-width:88%;text-align:center;
+    box-shadow:0 8px 30px rgba(0,0,0,.4); z-index:50;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="brand"><span class="dot"></span><h1>Disparo</h1></div>
+    <button class="gear" id="btn-settings">⚙</button>
+  </header>
+
+  <main>
+
+    <!-- MAIN CAPTURE SCREEN -->
+    <div class="screen active" id="screen-main">
+
+      <div class="success-badge" id="success-badge" style="display:none;">
+        <div class="check">✓</div>
+        <div>Guardada en Supabase · <a id="last-url" href="#" target="_blank">ver foto</a></div>
+      </div>
+
+      <div class="viewfinder" id="viewfinder">
+        <div class="corner tl"></div><div class="corner tr"></div>
+        <div class="corner bl"></div><div class="corner br"></div>
+        <div class="placeholder-icon" id="vf-placeholder">Sin foto todavía<br>toca el botón de abajo</div>
+        <img id="preview-img" style="display:none;" alt="Foto">
+      </div>
+
+      <input type="file" id="camera-input" accept="image/*" capture="environment">
+
+      <div class="control-row" id="row-shutter">
+        <div class="shutter" id="btn-shutter"></div>
+      </div>
+      <div class="control-row" id="row-confirm" style="display:none;">
+        <button class="round-btn retake" id="btn-retake">✕</button>
+        <button class="round-btn confirm" id="btn-confirm">✓</button>
+      </div>
+      <div class="control-row" id="row-uploading" style="display:none;">
+        <div class="hint" style="margin:0;">Guardando en Supabase…</div>
+      </div>
+
+      <div class="hint" id="main-hint">Toca el disparador para tomar la foto</div>
+
+      <div class="gallery-label" id="gallery-label" style="display:none;">Últimas guardadas</div>
+      <div class="gallery" id="gallery"></div>
+    </div>
+
+    <!-- SETTINGS SCREEN -->
+    <div class="screen" id="screen-settings">
+      <button class="btn-back-link" id="btn-back-from-settings">‹ Volver</button>
+      <div class="step-label">Alojamiento de fotos</div>
+      <div class="step-title" style="font-size:19px; margin-bottom:14px;">Conexión con Supabase</div>
+      <div class="hint" style="text-align:left; margin-top:0; margin-bottom:12px;">
+        Copia estos 3 datos desde tu panel de Supabase → <b>Settings → API</b>. Necesitas un bucket de
+        Storage público (puedes crearlo desde el SQL Editor si no ves la sección Storage — pregúntame si necesitas el código).
+      </div>
+      <div class="setup-field">
+        <label>Project URL</label>
+        <input id="input-sb-url" type="text" placeholder="https://xxxxx.supabase.co">
+      </div>
+      <div class="setup-field">
+        <label>Anon / public API key</label>
+        <input id="input-sb-key" type="text" placeholder="Pega tu anon key aquí">
+      </div>
+      <div class="setup-field">
+        <label>Nombre del bucket (público)</label>
+        <input id="input-sb-bucket" type="text" placeholder="fotos">
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" id="btn-save-key">Guardar conexión</button>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+let sbConfig = {
+  url:'https://vcobotpsaaevumkkramh.supabase.co',
+  key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZjb2JvdHBzYWFldnVta2tyYW1oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY0NjAyODYsImV4cCI6MjA4MjAzNjI4Nn0.d4EwMpnr-jSQMrE__m9zi-oJ2F3tx7re2sA1CyUUY7Y',
+  bucket:'Fotos albaranes'
+};
+let currentFile = null;
+let currentUrl = null;
+let recentPhotos = [];
+
+function show(id){
+  document.getElementById('screen-main').classList.toggle('active', id==='main');
+  document.getElementById('screen-settings').classList.toggle('active', id==='settings');
+}
+
+async function loadConfig(){
+  try{
+    const res = await window.storage.get('sbConfig');
+    if(res && res.value) sbConfig = JSON.parse(res.value);
+  }catch(e){}
+  try{
+    const res2 = await window.storage.get('recentPhotos');
+    if(res2 && res2.value) recentPhotos = JSON.parse(res2.value);
+  }catch(e){}
+}
+
+async function saveConfig(){
+  try{ await window.storage.set('sbConfig', JSON.stringify(sbConfig)); }catch(e){}
+}
+
+async function saveRecentPhotos(){
+  try{ await window.storage.set('recentPhotos', JSON.stringify(recentPhotos)); }catch(e){}
+}
+
+function renderGallery(){
+  const gallery = document.getElementById('gallery');
+  const label = document.getElementById('gallery-label');
+  gallery.innerHTML = '';
+  if(!recentPhotos.length){
+    label.style.display = 'none';
+    return;
+  }
+  label.style.display = 'block';
+  recentPhotos.slice(0,9).forEach(url=>{
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.innerHTML = `<img src="${url}" alt="Foto guardada">`;
+    gallery.appendChild(a);
+  });
+}
+
+document.getElementById('btn-settings').addEventListener('click', ()=>{
+  document.getElementById('input-sb-url').value = sbConfig.url;
+  document.getElementById('input-sb-key').value = sbConfig.key;
+  document.getElementById('input-sb-bucket').value = sbConfig.bucket;
+  show('settings');
+});
+document.getElementById('btn-back-from-settings').addEventListener('click', ()=> show('main'));
+
+document.getElementById('btn-save-key').addEventListener('click', async ()=>{
+  const url = document.getElementById('input-sb-url').value.trim().replace(/\/$/,'');
+  const key = document.getElementById('input-sb-key').value.trim();
+  const bucket = document.getElementById('input-sb-bucket').value.trim() || 'fotos';
+  if(!url || !key){ toast('Completa la URL del proyecto y la anon key'); return; }
+  sbConfig = { url, key, bucket };
+  await saveConfig();
+  toast('Conexión guardada');
+  show('main');
+});
+
+document.getElementById('btn-shutter').addEventListener('click', ()=>{
+  document.getElementById('camera-input').click();
+});
+
+document.getElementById('camera-input').addEventListener('change', (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  currentFile = file;
+  if(currentUrl) URL.revokeObjectURL(currentUrl);
+  currentUrl = URL.createObjectURL(file);
+  const img = document.getElementById('preview-img');
+  img.src = currentUrl;
+  img.style.display = 'block';
+  document.getElementById('vf-placeholder').style.display = 'none';
+  document.getElementById('row-shutter').style.display = 'none';
+  document.getElementById('row-confirm').style.display = 'flex';
+  document.getElementById('success-badge').style.display = 'none';
+  document.getElementById('main-hint').innerHTML = '✕ repetir &nbsp;·&nbsp; ✓ guardar en Supabase';
+});
+
+document.getElementById('btn-retake').addEventListener('click', ()=>{
+  document.getElementById('camera-input').value = '';
+  resetToShutter();
+});
+
+document.getElementById('btn-confirm').addEventListener('click', async ()=>{
+  if(!currentFile) return;
+  if(!sbConfig.url || !sbConfig.key){
+    toast('Falta conectar Supabase. Ve a ⚙ ajustes.');
+    show('settings');
+    return;
+  }
+  setUploading(true);
+  try{
+    const url = await uploadToSupabase(currentFile, sbConfig);
+    recentPhotos.unshift(url);
+    recentPhotos = recentPhotos.slice(0,9);
+    await saveRecentPhotos();
+    document.getElementById('last-url').href = url;
+    document.getElementById('success-badge').style.display = 'flex';
+    renderGallery();
+    resetToShutter();
+  }catch(err){
+    console.error(err);
+    toast('No se pudo guardar la foto. Revisa tu conexión de Supabase en ⚙ ajustes.');
+  }finally{
+    setUploading(false);
+  }
+});
+
+function setUploading(isUploading){
+  document.getElementById('row-confirm').style.display = isUploading ? 'none' : 'flex';
+  document.getElementById('row-uploading').style.display = isUploading ? 'flex' : 'none';
+}
+
+function resetToShutter(){
+  currentFile = null;
+  document.getElementById('camera-input').value = '';
+  document.getElementById('preview-img').style.display = 'none';
+  document.getElementById('vf-placeholder').style.display = 'block';
+  document.getElementById('row-shutter').style.display = 'flex';
+  document.getElementById('row-confirm').style.display = 'none';
+  document.getElementById('main-hint').textContent = 'Toca el disparador para tomar la foto';
+}
+
+async function uploadToSupabase(file, config){
+  const ext = (file.type && file.type.split('/')[1]) ? file.type.split('/')[1] : 'jpg';
+  const path = `foto-${Date.now()}.${ext}`;
+  const uploadUrl = `${config.url}/storage/v1/object/${encodeURIComponent(config.bucket)}/${path}`;
+  const res = await fetch(uploadUrl, {
+    method:'POST',
+    headers:{
+      'apikey': config.key,
+      'Authorization': `Bearer ${config.key}`,
+      'Content-Type': file.type || 'image/jpeg'
+    },
+    body: file
+  });
+  if(!res.ok){
+    const errText = await res.text().catch(()=> '');
+    throw new Error('Upload failed: ' + res.status + ' ' + errText);
+  }
+  return `${config.url}/storage/v1/object/public/${encodeURIComponent(config.bucket)}/${path}`;
+}
+
+function toast(msg){
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(()=> el.remove(), 3200);
+}
+
+async function init(){
+  await loadConfig();
+  renderGallery();
+  if(!sbConfig.url || !sbConfig.key){
+    show('settings');
+  }
+}
+init();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  });
+}
+</script>
+</body>
+</html>
