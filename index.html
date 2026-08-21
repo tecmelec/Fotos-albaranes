@@ -521,24 +521,29 @@ function showLocationStatus(text, isWarning){
   el.style.display = 'block';
 }
 
-async function resolveLocationLabel(){
-  if(!currentLocation) return null;
+async function resolveLocationInfo(){
+  if(!currentLocation) return { label:null, street:null };
   const { lat, lon } = currentLocation;
   const coordsText = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
   try{
     const controller = new AbortController();
     const timeoutId = setTimeout(()=> controller.abort(), 3500);
-    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=17`, { signal: controller.signal });
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=17&addressdetails=1`, { signal: controller.signal });
     clearTimeout(timeoutId);
-    if(!res.ok) return coordsText;
+    if(!res.ok) return { label: coordsText, street: null };
     const data = await res.json();
+    let label = coordsText;
     if(data && data.display_name){
-      const parts = data.display_name.split(',').slice(0,2).join(',').trim();
-      return parts || coordsText;
+      label = data.display_name.split(',').slice(0,2).join(',').trim() || coordsText;
     }
-    return coordsText;
+    let street = null;
+    if(data && data.address){
+      street = data.address.road || data.address.pedestrian || data.address.footway
+        || data.address.neighbourhood || data.address.suburb || null;
+    }
+    return { label, street };
   }catch(e){
-    return coordsText;
+    return { label: coordsText, street: null };
   }
 }
 
@@ -546,6 +551,15 @@ document.getElementById('btn-retake').addEventListener('click', ()=>{
   document.getElementById('camera-input').value = '';
   resetToShutter();
 });
+
+function slugify(text){
+  if(!text) return '';
+  return text
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quita tildes
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
 
 document.getElementById('btn-confirm').addEventListener('click', async ()=>{
   if(!currentFile) return;
@@ -556,8 +570,10 @@ document.getElementById('btn-confirm').addEventListener('click', async ()=>{
   }
   setUploading(true);
   try{
-    const watermarkedFile = await addWatermark(currentFile);
-    const url = await uploadToSupabase(watermarkedFile, sbConfig);
+    const locationInfo = await resolveLocationInfo();
+    const watermarkedFile = await addWatermark(currentFile, locationInfo.label);
+    const fileName = buildFileName(locationInfo.street, currentFile);
+    const url = await uploadToSupabase(watermarkedFile, sbConfig, fileName);
     recentPhotos.unshift(url);
     recentPhotos = recentPhotos.slice(0,9);
     await saveRecentPhotos();
@@ -572,6 +588,16 @@ document.getElementById('btn-confirm').addEventListener('click', async ()=>{
     setUploading(false);
   }
 });
+
+function buildFileName(street, file){
+  const now = new Date();
+  const datePart = now.toISOString().slice(0,10); // YYYY-MM-DD
+  const namePart = slugify(userName) || 'sin-nombre';
+  const streetPart = slugify(street) || 'sin-direccion';
+  const ext = (file.type && file.type.split('/')[1]) ? file.type.split('/')[1] : 'jpg';
+  const uniqueSuffix = Date.now().toString().slice(-5); // evita choques si se toman varias fotos el mismo día
+  return `${datePart}_${namePart}_${streetPart}_${uniqueSuffix}.${ext}`;
+}
 
 function loadImageFromFile(file){
   return new Promise((resolve, reject)=>{
@@ -598,7 +624,7 @@ function truncateToWidth(ctx, text, maxWidth){
   return low > 0 ? text.slice(0, low) + '…' : '…';
 }
 
-async function addWatermark(file){
+async function addWatermark(file, locationLabel){
   const img = await loadImageFromFile(file);
   const canvas = document.createElement('canvas');
   canvas.width = img.naturalWidth;
@@ -610,7 +636,6 @@ async function addWatermark(file){
   const dateStr = now.toLocaleDateString('es-ES', { day:'2-digit', month:'2-digit', year:'numeric' });
   const timeStr = now.toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
   const line1 = `${dateStr}  ${timeStr}`;
-  const locationLabel = await resolveLocationLabel();
   const rawLines = [line1];
   if(userName) rawLines.push(`👤 ${userName}`);
   if(locationLabel) rawLines.push(`📍 ${locationLabel}`);
@@ -668,9 +693,8 @@ function resetToShutter(){
   document.getElementById('btn-confirm').style.opacity = '1';
 }
 
-async function uploadToSupabase(file, config){
-  const ext = (file.type && file.type.split('/')[1]) ? file.type.split('/')[1] : 'jpg';
-  const path = `foto-${Date.now()}.${ext}`;
+async function uploadToSupabase(file, config, fileName){
+  const path = fileName;
   const uploadUrl = `${config.url}/storage/v1/object/${encodeURIComponent(config.bucket)}/${path}`;
   const res = await fetch(uploadUrl, {
     method:'POST',
