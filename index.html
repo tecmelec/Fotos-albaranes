@@ -300,6 +300,21 @@
 </div>
 
 <script>
+const localStore = {
+  async get(key){
+    try{
+      const val = localStorage.getItem(key);
+      return val === null ? null : { key, value: val };
+    }catch(e){ return null; }
+  },
+  async set(key, value){
+    try{
+      localStorage.setItem(key, value);
+      return { key, value };
+    }catch(e){ return null; }
+  }
+};
+
 let sbConfig = {
   url:'https://vcobotpsaaevumkkramh.supabase.co',
   key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZjb2JvdHBzYWFldnVta2tyYW1oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY0NjAyODYsImV4cCI6MjA4MjAzNjI4Nn0.d4EwMpnr-jSQMrE__m9zi-oJ2F3tx7re2sA1CyUUY7Y',
@@ -327,29 +342,29 @@ function show(id){
 
 async function loadConfig(){
   try{
-    const res = await window.storage.get('sbConfig');
+    const res = await localStore.get('sbConfig');
     if(res && res.value) sbConfig = JSON.parse(res.value);
   }catch(e){}
   try{
-    const res2 = await window.storage.get('recentPhotos');
+    const res2 = await localStore.get('recentPhotos');
     if(res2 && res2.value) recentPhotos = JSON.parse(res2.value);
   }catch(e){}
   try{
-    const res3 = await window.storage.get('userName');
+    const res3 = await localStore.get('userName');
     if(res3 && res3.value) userName = res3.value;
   }catch(e){}
 }
 
 async function saveUserName(){
-  try{ await window.storage.set('userName', userName); }catch(e){}
+  try{ await localStore.set('userName', userName); }catch(e){}
 }
 
 async function saveConfig(){
-  try{ await window.storage.set('sbConfig', JSON.stringify(sbConfig)); }catch(e){}
+  try{ await localStore.set('sbConfig', JSON.stringify(sbConfig)); }catch(e){}
 }
 
 async function saveRecentPhotos(){
-  try{ await window.storage.set('recentPhotos', JSON.stringify(recentPhotos)); }catch(e){}
+  try{ await localStore.set('recentPhotos', JSON.stringify(recentPhotos)); }catch(e){}
 }
 
 function renderGallery(){
@@ -686,7 +701,7 @@ init();
 
 async function setupReminders(){
   try{
-    const res = await window.storage.get('lastReminderKey');
+    const res = await localStore.get('lastReminderKey');
     if(res && res.value) lastReminderKey = res.value;
   }catch(e){}
 
@@ -732,7 +747,7 @@ async function checkReminderSchedule(){
   if(lastReminderKey === key) return;
 
   lastReminderKey = key;
-  try{ await window.storage.set('lastReminderKey', key); }catch(e){}
+  try{ await localStore.set('lastReminderKey', key); }catch(e){}
 
   fireReminderNotification();
 }
