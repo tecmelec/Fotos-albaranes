@@ -216,10 +216,10 @@
         <div>Guardada en Supabase · <a id="last-url" href="#" target="_blank">ver foto</a></div>
       </div>
 
-      <div class="viewfinder" id="viewfinder">
+      <div class="viewfinder" id="viewfinder" style="cursor:pointer;">
         <div class="corner tl"></div><div class="corner tr"></div>
         <div class="corner bl"></div><div class="corner br"></div>
-        <div class="placeholder-icon" id="vf-placeholder">Sin foto todavía<br>toca el botón de abajo</div>
+        <div class="placeholder-icon" id="vf-placeholder">Sin foto todavía<br>toca aquí para abrir la cámara</div>
         <img id="preview-img" style="display:none;" alt="Foto">
       </div>
 
@@ -390,7 +390,12 @@ document.getElementById('btn-welcome-continue').addEventListener('click', async 
   if(!name){ toast('Escribe tu nombre para continuar'); return; }
   userName = name;
   await saveUserName();
-  show('main');
+  if(sbConfig.url && sbConfig.key){
+    show('main');
+    tryAutoOpenCamera();
+  }else{
+    show('settings');
+  }
 });
 
 document.getElementById('btn-save-username').addEventListener('click', async ()=>{
@@ -449,6 +454,12 @@ document.getElementById('btn-save-key').addEventListener('click', async ()=>{
 
 document.getElementById('btn-shutter').addEventListener('click', ()=>{
   document.getElementById('camera-input').click();
+});
+
+document.getElementById('viewfinder').addEventListener('click', ()=>{
+  if(!currentFile){
+    document.getElementById('camera-input').click();
+  }
 });
 
 document.getElementById('camera-input').addEventListener('change', (e)=>{
@@ -694,10 +705,22 @@ async function init(){
     show('settings');
   }else{
     show('main');
+    tryAutoOpenCamera();
   }
   setupReminders();
 }
 init();
+
+function tryAutoOpenCamera(){
+  // Best effort: some Android browsers allow opening the camera picker
+  // without a prior tap when the page has just loaded. iOS Safari and
+  // most desktop browsers block this and require a real tap — in that
+  // case nothing happens and the person just taps the viewfinder/shutter
+  // as usual, so this never breaks anything, it's purely a bonus.
+  setTimeout(()=>{
+    try{ document.getElementById('camera-input').click(); }catch(e){}
+  }, 250);
+}
 
 async function setupReminders(){
   try{
