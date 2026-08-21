@@ -209,7 +209,7 @@
   <main>
 
     <!-- MAIN CAPTURE SCREEN -->
-    <div class="screen active" id="screen-main">
+    <div class="screen" id="screen-main">
 
       <div class="success-badge" id="success-badge" style="display:none;">
         <div class="check">✓</div>
@@ -267,6 +267,33 @@
       <div class="actions">
         <button class="btn btn-primary" id="btn-save-key">Guardar conexión</button>
       </div>
+
+      <div style="height:1px; background:var(--line); margin:26px 0;"></div>
+
+      <div class="step-label">Tu nombre</div>
+      <div class="setup-field">
+        <label>Aparecerá en la marca de agua de cada foto</label>
+        <input id="input-username" type="text" placeholder="Ej. Juan Pérez">
+      </div>
+      <div class="actions">
+        <button class="btn btn-ghost" id="btn-save-username">Guardar nombre</button>
+      </div>
+    </div>
+
+    <!-- WELCOME / NAME SCREEN (first launch) -->
+    <div class="screen active" id="screen-welcome">
+      <div class="step-label">Bienvenido</div>
+      <div class="step-title">¿Cuál es tu nombre?</div>
+      <div class="hint" style="text-align:left; margin-top:0; margin-bottom:16px;">
+        Aparecerá como marca de agua en cada foto, junto con la fecha, hora y ubicación.
+      </div>
+      <div class="setup-field">
+        <label>Tu nombre</label>
+        <input id="input-welcome-name" type="text" placeholder="Ej. Juan Pérez">
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" id="btn-welcome-continue">Continuar</button>
+      </div>
     </div>
 
   </main>
@@ -283,6 +310,7 @@ let currentUrl = null;
 let currentLocation = null;
 let recentPhotos = [];
 let lastReminderKey = null;
+let userName = '';
 
 const REMINDER_MESSAGE = '📸 ¡No te olvides! Envía las fotos de los albaranes recibidos hoy y déjalo todo al día. 😊 ¡Gracias!';
 // day: 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
@@ -292,6 +320,7 @@ const REMINDER_SCHEDULE = [
 ];
 
 function show(id){
+  document.getElementById('screen-welcome').classList.toggle('active', id==='welcome');
   document.getElementById('screen-main').classList.toggle('active', id==='main');
   document.getElementById('screen-settings').classList.toggle('active', id==='settings');
 }
@@ -305,6 +334,14 @@ async function loadConfig(){
     const res2 = await window.storage.get('recentPhotos');
     if(res2 && res2.value) recentPhotos = JSON.parse(res2.value);
   }catch(e){}
+  try{
+    const res3 = await window.storage.get('userName');
+    if(res3 && res3.value) userName = res3.value;
+  }catch(e){}
+}
+
+async function saveUserName(){
+  try{ await window.storage.set('userName', userName); }catch(e){}
 }
 
 async function saveConfig(){
@@ -333,6 +370,22 @@ function renderGallery(){
   });
 }
 
+document.getElementById('btn-welcome-continue').addEventListener('click', async ()=>{
+  const name = document.getElementById('input-welcome-name').value.trim();
+  if(!name){ toast('Escribe tu nombre para continuar'); return; }
+  userName = name;
+  await saveUserName();
+  show('main');
+});
+
+document.getElementById('btn-save-username').addEventListener('click', async ()=>{
+  const name = document.getElementById('input-username').value.trim();
+  if(!name){ toast('Escribe un nombre válido'); return; }
+  userName = name;
+  await saveUserName();
+  toast('Nombre guardado');
+});
+
 const SETTINGS_PASSWORD = '9999';
 
 document.getElementById('btn-settings').addEventListener('click', ()=>{
@@ -353,6 +406,7 @@ function trySettingsPassword(){
     document.getElementById('input-sb-url').value = sbConfig.url;
     document.getElementById('input-sb-key').value = sbConfig.key;
     document.getElementById('input-sb-bucket').value = sbConfig.bucket;
+    document.getElementById('input-username').value = userName;
     show('settings');
   }else{
     document.getElementById('pw-error').style.display = 'block';
@@ -531,7 +585,9 @@ async function addWatermark(file){
   const timeStr = now.toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
   const line1 = `${dateStr}  ${timeStr}`;
   const locationLabel = await resolveLocationLabel();
-  const rawLines = locationLabel ? [line1, `📍 ${locationLabel}`] : [line1];
+  const rawLines = [line1];
+  if(userName) rawLines.push(`👤 ${userName}`);
+  if(locationLabel) rawLines.push(`📍 ${locationLabel}`);
 
   const fontSize = Math.max(20, Math.round(canvas.width * 0.028));
   ctx.font = `600 ${fontSize}px -apple-system, sans-serif`;
@@ -617,8 +673,12 @@ function toast(msg){
 async function init(){
   await loadConfig();
   renderGallery();
-  if(!sbConfig.url || !sbConfig.key){
+  if(!userName){
+    show('welcome');
+  }else if(!sbConfig.url || !sbConfig.key){
     show('settings');
+  }else{
+    show('main');
   }
   setupReminders();
 }
