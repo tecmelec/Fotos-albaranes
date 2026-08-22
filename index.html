@@ -221,6 +221,10 @@
         <div class="corner bl"></div><div class="corner br"></div>
         <div class="placeholder-icon" id="vf-placeholder">Sin foto todavía<br>toca aquí para abrir la cámara</div>
         <img id="preview-img" style="display:none;" alt="Foto">
+        <div id="code-overlay" style="display:none; position:absolute; inset:0; background:rgba(16,16,18,0.72); align-items:center; justify-content:center; text-align:center; padding:24px; flex-direction:column; gap:12px;">
+          <div style="font-size:15px; color:#f2efe9; line-height:1.4; max-width:280px;">Escribe este número en el albarán que se lleva el proveedor:</div>
+          <div id="code-overlay-value" style="font-size:32px; font-weight:800; letter-spacing:0.05em; background:#e84cc4; color:#101012; padding:6px 18px; border-radius:10px;"></div>
+        </div>
       </div>
 
       <input type="file" id="camera-input" accept="image/*" capture="environment">
@@ -323,6 +327,7 @@ let sbConfig = {
 let currentFile = null;
 let currentUrl = null;
 let currentLocation = null;
+let currentPhotoCode = null;
 let recentPhotos = [];
 let lastReminderKey = null;
 let userName = '';
@@ -477,12 +482,20 @@ document.getElementById('camera-input').addEventListener('change', (e)=>{
   document.getElementById('success-badge').style.display = 'none';
   document.getElementById('main-hint').innerHTML = '✕ repetir &nbsp;·&nbsp; ✓ guardar en Supabase';
 
+  currentPhotoCode = generatePhotoCode();
+  document.getElementById('code-overlay-value').textContent = currentPhotoCode;
+  document.getElementById('code-overlay').style.display = 'flex';
+
   currentLocation = null;
   document.getElementById('location-status').style.display = 'none';
   document.getElementById('btn-confirm').disabled = true;
   document.getElementById('btn-confirm').style.opacity = '0.4';
   requestLocation();
 });
+
+function generatePhotoCode(){
+  return Date.now().toString().slice(-5);
+}
 
 function requestLocation(){
   const confirmBtn = document.getElementById('btn-confirm');
@@ -569,6 +582,7 @@ document.getElementById('btn-confirm').addEventListener('click', async ()=>{
     return;
   }
   setUploading(true);
+  document.getElementById('code-overlay').style.display = 'none';
   try{
     const locationInfo = await resolveLocationInfo();
     const watermarkedFile = await addWatermark(currentFile, locationInfo.label);
@@ -595,7 +609,7 @@ function buildFileName(street, file){
   const namePart = slugify(userName) || 'sin-nombre';
   const streetPart = slugify(street) || 'sin-direccion';
   const ext = (file.type && file.type.split('/')[1]) ? file.type.split('/')[1] : 'jpg';
-  const uniqueSuffix = Date.now().toString().slice(-5); // evita choques si se toman varias fotos el mismo día
+  const uniqueSuffix = currentPhotoCode || Date.now().toString().slice(-5);
   return `${datePart}_${namePart}_${streetPart}_${uniqueSuffix}.${ext}`;
 }
 
@@ -682,8 +696,10 @@ function setUploading(isUploading){
 
 function resetToShutter(){
   currentFile = null;
+  currentPhotoCode = null;
   document.getElementById('camera-input').value = '';
   document.getElementById('preview-img').style.display = 'none';
+  document.getElementById('code-overlay').style.display = 'none';
   document.getElementById('vf-placeholder').style.display = 'block';
   document.getElementById('row-shutter').style.display = 'flex';
   document.getElementById('row-confirm').style.display = 'none';
