@@ -245,6 +245,11 @@
 
       <div class="gallery-label" id="gallery-label" style="display:none;">Últimas guardadas</div>
       <div class="gallery" id="gallery"></div>
+
+      <div id="pending-banner" style="display:none; margin-top:16px; background:rgba(232,169,76,0.1); border:1px solid var(--amber-dim); border-radius:12px; padding:12px 14px; font-size:13px; display:flex; align-items:center; gap:10px; justify-content:space-between;">
+        <span id="pending-banner-text">0 fotos pendientes de subir</span>
+        <button id="btn-retry-sync" style="background:var(--amber); color:#2a1c05; border:none; border-radius:8px; padding:7px 12px; font-size:12px; font-weight:700; cursor:pointer;">Reintentar</button>
+      </div>
     </div>
 
     <!-- SETTINGS SCREEN -->
@@ -328,6 +333,99 @@ let currentFile = null;
 let currentUrl = null;
 let currentLocation = null;
 let currentPhotoCode = null;
+let isSyncingQueue = false;
+
+const OFFLINE_DB_NAME = 'disparo-offline-db';
+const OFFLINE_STORE_NAME = 'pendingUploads';
+
+function openOfflineDB(){
+  return new Promise((resolve, reject)=>{
+    const req = indexedDB.open(OFFLINE_DB_NAME, 1);
+    req.onupgradeneeded = ()=>{
+      const db = req.result;
+      if(!db.objectStoreNames.contains(OFFLINE_STORE_NAME)){
+        db.createObjectStore(OFFLINE_STORE_NAME, { keyPath:'id', autoIncrement:true });
+      }
+    };
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+async function queuePendingUpload(fileName, blob){
+  const db = await openOfflineDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(OFFLINE_STORE_NAME, 'readwrite');
+    tx.objectStore(OFFLINE_STORE_NAME).add({ fileName, blob, createdAt: Date.now() });
+    tx.oncomplete = ()=> resolve();
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+
+async function getPendingUploads(){
+  const db = await openOfflineDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(OFFLINE_STORE_NAME, 'readonly');
+    const req = tx.objectStore(OFFLINE_STORE_NAME).getAll();
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+async function deletePendingUpload(id){
+  const db = await openOfflineDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(OFFLINE_STORE_NAME, 'readwrite');
+    tx.objectStore(OFFLINE_STORE_NAME).delete(id);
+    tx.oncomplete = ()=> resolve();
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+
+async function updatePendingBadge(){
+  let count = 0;
+  try{ count = (await getPendingUploads()).length; }catch(e){}
+  const banner = document.getElementById('pending-banner');
+  const text = document.getElementById('pending-banner-text');
+  if(count > 0){
+    text.textContent = count === 1 ? '1 foto pendiente de subir' : `${count} fotos pendientes de subir`;
+    banner.style.display = 'flex';
+  }else{
+    banner.style.display = 'none';
+  }
+}
+
+async function trySyncPendingUploads(){
+  if(isSyncingQueue) return;
+  if(!navigator.onLine) return;
+  if(!sbConfig.url || !sbConfig.key) return;
+  isSyncingQueue = true;
+  try{
+    const pending = await getPendingUploads();
+    for(const item of pending){
+      try{
+        const url = await uploadToSupabase(item.blob, sbConfig, item.fileName);
+        await deletePendingUpload(item.id);
+        recentPhotos.unshift(url);
+        recentPhotos = recentPhotos.slice(0,9);
+        await saveRecentPhotos();
+      }catch(e){
+        break; // se cortó la conexión de nuevo a media subida; el resto se reintenta después
+      }
+    }
+  }catch(e){ /* nada pendiente o error leyendo la base local */ }
+  isSyncingQueue = false;
+  renderGallery();
+  await updatePendingBadge();
+}
+
+document.getElementById('btn-retry-sync').addEventListener('click', ()=>{
+  toast('Buscando conexión…');
+  trySyncPendingUploads();
+});
+
+window.addEventListener('online', ()=> trySyncPendingUploads());
+setInterval(()=> trySyncPendingUploads(), 2 * 60 * 1000);
 let recentPhotos = [];
 let lastReminderKey = null;
 let userName = '';
@@ -587,17 +685,35 @@ document.getElementById('btn-confirm').addEventListener('click', async ()=>{
     const locationInfo = await resolveLocationInfo();
     const watermarkedFile = await addWatermark(currentFile, locationInfo.label);
     const fileName = buildFileName(locationInfo.street, currentFile);
-    const url = await uploadToSupabase(watermarkedFile, sbConfig, fileName);
-    recentPhotos.unshift(url);
-    recentPhotos = recentPhotos.slice(0,9);
-    await saveRecentPhotos();
-    document.getElementById('last-url').href = url;
-    document.getElementById('success-badge').style.display = 'flex';
-    renderGallery();
-    resetToShutter();
+
+    if(!navigator.onLine){
+      await queuePendingUpload(fileName, watermarkedFile);
+      await updatePendingBadge();
+      toast('📴 Sin conexión: la foto quedó guardada en el teléfono y se subirá sola cuando vuelva el internet.');
+      resetToShutter();
+      return;
+    }
+
+    try{
+      const url = await uploadToSupabase(watermarkedFile, sbConfig, fileName);
+      recentPhotos.unshift(url);
+      recentPhotos = recentPhotos.slice(0,9);
+      await saveRecentPhotos();
+      document.getElementById('last-url').href = url;
+      document.getElementById('success-badge').style.display = 'flex';
+      renderGallery();
+      resetToShutter();
+    }catch(uploadErr){
+      // Falló la subida aunque parecía haber conexión (red inestable, etc.)
+      console.error(uploadErr);
+      await queuePendingUpload(fileName, watermarkedFile);
+      await updatePendingBadge();
+      toast('📴 No se pudo subir ahora. La foto quedó guardada en el teléfono y se reintentará sola.');
+      resetToShutter();
+    }
   }catch(err){
     console.error(err);
-    toast('No se pudo guardar la foto. Revisa tu conexión de Supabase en ⚙ ajustes.');
+    toast('No se pudo procesar la foto. Intenta de nuevo.');
   }finally{
     setUploading(false);
   }
@@ -739,6 +855,7 @@ function toast(msg){
 async function init(){
   await loadConfig();
   renderGallery();
+  await updatePendingBadge();
   if(!userName){
     show('welcome');
   }else if(!sbConfig.url || !sbConfig.key){
@@ -748,6 +865,7 @@ async function init(){
     tryAutoOpenCamera();
   }
   setupReminders();
+  trySyncPendingUploads();
 }
 init();
 
