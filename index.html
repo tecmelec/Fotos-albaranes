@@ -260,7 +260,7 @@
         <button class="round-btn confirm" id="btn-confirm">✓</button>
       </div>
       <div class="control-row" id="row-uploading" style="display:none;">
-        <div class="hint" style="margin:0;">Guardando en Supabase…</div>
+        <div class="hint" id="uploading-status-text" style="margin:0;">Guardando en Supabase…</div>
       </div>
 
       <div class="hint" id="main-hint">Toca el disparador para tomar la foto</div>
@@ -318,13 +318,14 @@
     <div class="screen" id="screen-activity">
       <button class="btn-back-link" id="btn-back-from-activity">‹ Volver</button>
       <div class="step-label">Actividad</div>
-      <div class="step-title" style="font-size:19px; margin-bottom:6px;">Fotos de quienes sigues</div>
+      <div class="step-title" style="font-size:19px; margin-bottom:6px;">Fotos de quienes sigues y palabras clave</div>
       <div class="hint" style="text-align:left; margin-top:0; margin-bottom:16px;">
         Se revisa automáticamente mientras tienes la app abierta.
       </div>
       <div id="activity-list"></div>
-      <div class="actions" style="margin-top:18px;">
-        <button class="btn btn-ghost" id="btn-go-follow">👥 Editar a quién sigo</button>
+      <div class="actions" style="margin-top:18px; flex-direction:column; gap:10px;">
+        <button class="btn btn-ghost" id="btn-go-follow" style="width:100%;">👥 Editar a quién sigo</button>
+        <button class="btn btn-ghost" id="btn-go-keywords" style="width:100%;">🔑 Mis palabras clave</button>
       </div>
     </div>
 
@@ -341,6 +342,25 @@
       <div class="actions">
         <button class="btn btn-primary" id="btn-save-follow">Guardar</button>
       </div>
+    </div>
+
+    <!-- KEYWORDS SETTINGS SCREEN -->
+    <div class="screen" id="screen-keywords">
+      <button class="btn-back-link" id="btn-back-from-keywords">‹ Volver</button>
+      <div class="step-label">Palabras clave</div>
+      <div class="step-title" style="font-size:19px; margin-bottom:6px;">¿Qué texto quieres vigilar?</div>
+      <div class="hint" style="text-align:left; margin-top:0; margin-bottom:16px;">
+        La app lee el texto impreso de cada foto nueva (etiquetas, placas, códigos). Si aparece alguna de tus
+        palabras, te avisa. Funciona mejor con texto impreso claro; el texto escrito a mano puede fallar.
+      </div>
+      <div class="setup-field">
+        <label>Agregar palabra o código</label>
+        <div style="display:flex; gap:8px;">
+          <input id="input-new-keyword" type="text" placeholder="Ej. PC260560" style="flex:1;">
+          <button id="btn-add-keyword" style="background:var(--amber); color:#2a1c05; border:none; border-radius:10px; padding:0 16px; font-weight:700; cursor:pointer;">+</button>
+        </div>
+      </div>
+      <div id="keywords-list" style="margin-top:14px;"></div>
     </div>
 
     <!-- ADMIN: FOLLOW PERMISSIONS SCREEN -->
@@ -512,6 +532,7 @@ function show(id){
   document.getElementById('screen-settings').classList.toggle('active', id==='settings');
   document.getElementById('screen-activity').classList.toggle('active', id==='activity');
   document.getElementById('screen-follow').classList.toggle('active', id==='follow');
+  document.getElementById('screen-keywords').classList.toggle('active', id==='keywords');
   document.getElementById('screen-admin').classList.toggle('active', id==='admin');
 }
 
@@ -1004,10 +1025,14 @@ async function renderActivityList(){
     row.style.cssText = 'display:flex; gap:12px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:10px; margin-bottom:10px; text-decoration:none; color:var(--text);';
     const when = new Date(item.time);
     const whenStr = when.toLocaleDateString('es-ES', { day:'2-digit', month:'2-digit' }) + ' · ' + when.toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit' });
+    const reasonLabel = item.keyword
+      ? `<span style="color:var(--amber);">🔑 ${item.keyword}</span>`
+      : `<span style="color:var(--text-dim);">👥 Sigues a esta persona</span>`;
     row.innerHTML = `
       <img src="${item.url}" style="width:56px; height:56px; object-fit:cover; border-radius:10px; flex-shrink:0;" alt="Foto">
       <div style="min-width:0;">
         <div style="font-size:14px; font-weight:600;">${item.uploader}</div>
+        <div style="font-size:11px; margin:2px 0;">${reasonLabel}</div>
         <div style="font-size:12px; color:var(--text-dim);">${whenStr}</div>
       </div>
     `;
@@ -1072,10 +1097,185 @@ async function checkFollowedUploads(){
   }
 }
 
-setInterval(()=> { if(canFollow) checkFollowedUploads(); }, 90 * 1000);
+setInterval(()=> { if(canFollow){ checkFollowedUploads(); checkKeywordMatches(); } }, 90 * 1000);
 document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState === 'visible' && canFollow) checkFollowedUploads();
+  if(document.visibilityState === 'visible' && canFollow){ checkFollowedUploads(); checkKeywordMatches(); }
 });
+
+// ---------- OCR (lectura de texto en la foto) ----------
+
+let tesseractLoaded = false;
+function loadTesseract(){
+  return new Promise((resolve, reject)=>{
+    if(tesseractLoaded && window.Tesseract){ resolve(); return; }
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js';
+    script.onload = ()=>{ tesseractLoaded = true; resolve(); };
+    script.onerror = ()=> reject(new Error('No se pudo cargar el lector de texto'));
+    document.head.appendChild(script);
+  });
+}
+
+async function extractTextFromPhoto(file){
+  try{
+    await loadTesseract();
+    const result = await Tesseract.recognize(file, 'eng');
+    return (result && result.data && result.data.text) ? result.data.text : '';
+  }catch(e){
+    console.error('OCR error', e);
+    return '';
+  }
+}
+
+async function saveExtractedText(fileName, text){
+  if(!sbConfig.url || !sbConfig.key || !text) return;
+  try{
+    await fetch(`${sbConfig.url}/rest/v1/photo_ocr?on_conflict=file_name`, {
+      method:'POST',
+      headers:{
+        'apikey': sbConfig.key,
+        'Authorization': `Bearer ${sbConfig.key}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify({ file_name: fileName, extracted_text: text })
+    });
+  }catch(e){ /* sin conexión: esta foto simplemente no quedará indexada para palabras clave */ }
+}
+
+// ---------- Palabras clave (configuración personal) ----------
+
+document.getElementById('btn-go-keywords').addEventListener('click', async ()=>{
+  show('keywords');
+  await renderKeywordsList();
+});
+document.getElementById('btn-back-from-keywords').addEventListener('click', ()=> show('activity'));
+
+async function getMyKeywords(){
+  try{
+    const res = await localStore.get('myKeywords');
+    return res && res.value ? JSON.parse(res.value) : [];
+  }catch(e){ return []; }
+}
+async function saveMyKeywords(list){
+  await localStore.set('myKeywords', JSON.stringify(list));
+}
+
+async function renderKeywordsList(){
+  const keywords = await getMyKeywords();
+  const list = document.getElementById('keywords-list');
+  list.innerHTML = '';
+  if(!keywords.length){
+    list.innerHTML = '<div class="hint" style="text-align:left;">Todavía no agregas ninguna palabra clave.</div>';
+    return;
+  }
+  keywords.forEach(kw=>{
+    const row = document.createElement('div');
+    row.className = 'contact-row';
+    row.innerHTML = `
+      <div class="avatar">🔑</div>
+      <div class="who" style="flex:1;"><div class="n">${kw}</div></div>
+      <button class="del" data-kw="${kw}">🗑</button>
+    `;
+    row.querySelector('.del').addEventListener('click', async ()=>{
+      const updated = (await getMyKeywords()).filter(k => k !== kw);
+      await saveMyKeywords(updated);
+      renderKeywordsList();
+    });
+    list.appendChild(row);
+  });
+}
+
+document.getElementById('btn-add-keyword').addEventListener('click', async ()=>{
+  const input = document.getElementById('input-new-keyword');
+  const value = input.value.trim().toUpperCase();
+  if(!value){ toast('Escribe una palabra o código'); return; }
+  const keywords = await getMyKeywords();
+  if(keywords.includes(value)){ toast('Ya está en tu lista'); input.value=''; return; }
+  keywords.push(value);
+  await saveMyKeywords(keywords);
+  input.value = '';
+  renderKeywordsList();
+  const existingCheck = await localStore.get('lastKeywordCheck');
+  if(!existingCheck) await localStore.set('lastKeywordCheck', String(Date.now()));
+});
+
+async function checkKeywordMatches(){
+  if(!sbConfig.url || !sbConfig.key) return;
+  const keywords = await getMyKeywords();
+  if(!keywords.length) return;
+
+  let lastChecked = 0;
+  try{
+    const res = await localStore.get('lastKeywordCheck');
+    lastChecked = res && res.value ? parseInt(res.value, 10) : 0;
+  }catch(e){}
+  const now = Date.now();
+
+  let objects;
+  try{ objects = await listBucketObjects(100); }catch(e){ return; }
+
+  const candidates = objects.filter(o => new Date(o.created_at).getTime() > lastChecked);
+  await localStore.set('lastKeywordCheck', String(now));
+  if(!candidates.length) return;
+
+  const namesFilter = candidates.map(o => `"${o.name}"`).join(',');
+  let ocrRows = [];
+  try{
+    const res = await fetch(`${sbConfig.url}/rest/v1/photo_ocr?file_name=in.(${namesFilter})&select=file_name,extracted_text`, {
+      headers:{ 'apikey': sbConfig.key, 'Authorization': `Bearer ${sbConfig.key}` }
+    });
+    if(res.ok) ocrRows = await res.json();
+  }catch(e){ return; }
+
+  const matches = [];
+  ocrRows.forEach(row=>{
+    const upperText = (row.extracted_text || '').toUpperCase();
+    const hit = keywords.find(kw => upperText.includes(kw));
+    if(hit){
+      const obj = candidates.find(o => o.name === row.file_name);
+      const parsed = obj ? parseFileName(obj.name) : null;
+      matches.push({
+        name: row.file_name,
+        uploader: parsed ? labelFromSlug(parsed.namePart) : 'Alguien',
+        url: publicUrlFor(row.file_name),
+        time: obj ? obj.created_at : new Date().toISOString(),
+        keyword: hit
+      });
+    }
+  });
+  if(!matches.length) return;
+
+  let activity = await getActivityFeed();
+  matches.forEach(m=>{
+    activity.unshift({
+      name: m.name,
+      uploader: m.uploader,
+      url: m.url,
+      time: m.time,
+      keyword: m.keyword
+    });
+  });
+  activity = activity.slice(0, 30);
+  await localStore.set('activityFeed', JSON.stringify(activity));
+
+  document.getElementById('activity-dot').style.display = 'block';
+
+  if('Notification' in window && Notification.permission === 'granted'){
+    const title = matches.length === 1
+      ? `🔑 Encontrado: ${matches[0].keyword}`
+      : `🔑 ${matches.length} fotos con tus palabras clave`;
+    const body = matches.map(m => `${m.keyword} (${m.uploader})`).join(', ');
+    try{
+      if('serviceWorker' in navigator){
+        const reg = await navigator.serviceWorker.ready;
+        await reg.showNotification(title, { body, icon:'./icon-192.png', badge:'./icon-192.png', image: matches[0].url, tag:'keyword-activity', data:{ screen:'activity' } });
+      }else{
+        new Notification(title, { body, icon:'./icon-192.png' });
+      }
+    }catch(e){}
+  }
+}
 
 document.getElementById('btn-confirm').addEventListener('click', async ()=>{
   if(!currentFile) return;
@@ -1086,10 +1286,14 @@ document.getElementById('btn-confirm').addEventListener('click', async ()=>{
   }
   setUploading(true);
   document.getElementById('code-overlay').style.display = 'none';
+  document.getElementById('uploading-status-text').textContent = 'Analizando texto…';
   try{
     const locationInfo = await resolveLocationInfo();
     const watermarkedFile = await addWatermark(currentFile, locationInfo.label);
     const fileName = buildFileName(locationInfo.street, currentFile);
+    const extractedText = navigator.onLine ? await extractTextFromPhoto(currentFile) : '';
+
+    document.getElementById('uploading-status-text').textContent = 'Guardando en Supabase…';
 
     if(!navigator.onLine){
       await queuePendingUpload(fileName, watermarkedFile);
@@ -1101,6 +1305,7 @@ document.getElementById('btn-confirm').addEventListener('click', async ()=>{
 
     try{
       const url = await uploadToSupabase(watermarkedFile, sbConfig, fileName);
+      await saveExtractedText(fileName, extractedText);
       recentPhotos.unshift(url);
       recentPhotos = recentPhotos.slice(0,9);
       await saveRecentPhotos();
@@ -1275,7 +1480,7 @@ async function init(){
   if(userName && sbConfig.url && sbConfig.key){
     await registerSelfInPermissions();
     await refreshCanFollow();
-    if(canFollow) checkFollowedUploads();
+    if(canFollow){ checkFollowedUploads(); checkKeywordMatches(); }
   }
 }
 init();
