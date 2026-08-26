@@ -212,6 +212,23 @@
     </div>
   </div>
 
+  <!-- SUPERVISOR PASSWORD MODAL -->
+  <div id="admin-pw-modal" style="display:none; position:fixed; inset:0; background:rgba(16,16,18,0.75); z-index:100; align-items:center; justify-content:center; padding:20px;">
+    <div style="background:var(--card); border:1px solid var(--line); border-radius:16px; padding:22px; width:100%; max-width:320px;">
+      <div class="step-label">Panel de supervisor</div>
+      <div class="step-title" style="font-size:18px; margin-bottom:14px;">Ingresa la contraseña</div>
+      <div class="setup-field">
+        <label>Contraseña</label>
+        <input id="input-admin-pw" type="password" placeholder="••••••••" autocomplete="off">
+      </div>
+      <div id="admin-pw-error" style="display:none; color:var(--danger); font-size:12.5px; margin-bottom:8px;">Contraseña incorrecta</div>
+      <div class="actions" style="margin-top:4px;">
+        <button class="btn btn-ghost" id="btn-admin-pw-cancel">Cancelar</button>
+        <button class="btn btn-primary" id="btn-admin-pw-submit">Entrar</button>
+      </div>
+    </div>
+  </div>
+
   <main>
 
     <!-- MAIN CAPTURE SCREEN -->
@@ -256,6 +273,8 @@
         <span id="pending-banner-text">0 fotos pendientes de subir</span>
         <button id="btn-retry-sync" style="background:var(--amber); color:#2a1c05; border:none; border-radius:8px; padding:7px 12px; font-size:12px; font-weight:700; cursor:pointer;">Reintentar</button>
       </div>
+
+      <button id="btn-open-admin" style="background:none; border:none; color:var(--text-dim); font-size:11px; margin-top:22px; padding:6px; cursor:pointer; opacity:0.5;">Panel de supervisor</button>
     </div>
 
     <!-- SETTINGS SCREEN -->
@@ -321,6 +340,20 @@
       <div id="follow-list"></div>
       <div class="actions">
         <button class="btn btn-primary" id="btn-save-follow">Guardar</button>
+      </div>
+    </div>
+
+    <!-- ADMIN: FOLLOW PERMISSIONS SCREEN -->
+    <div class="screen" id="screen-admin">
+      <button class="btn-back-link" id="btn-back-from-admin">‹ Volver</button>
+      <div class="step-label">Panel de supervisor</div>
+      <div class="step-title" style="font-size:19px; margin-bottom:6px;">Permisos de "a quién sigo"</div>
+      <div class="hint" style="text-align:left; margin-top:0; margin-bottom:16px;">
+        Marca a quién le permites usar la función de seguir a compañeros. Por defecto, los usuarios nuevos no tienen acceso.
+      </div>
+      <div id="admin-permissions-list"></div>
+      <div class="actions">
+        <button class="btn btn-primary" id="btn-save-admin">Guardar cambios</button>
       </div>
     </div>
 
@@ -464,6 +497,7 @@ setInterval(()=> trySyncPendingUploads(), 2 * 60 * 1000);
 let recentPhotos = [];
 let lastReminderKey = null;
 let userName = '';
+let canFollow = false;
 
 const REMINDER_MESSAGE = '📸 ¡No te olvides! Envía las fotos de los albaranes recibidos hoy y déjalo todo al día. 😊 ¡Gracias!';
 // day: 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
@@ -478,6 +512,7 @@ function show(id){
   document.getElementById('screen-settings').classList.toggle('active', id==='settings');
   document.getElementById('screen-activity').classList.toggle('active', id==='activity');
   document.getElementById('screen-follow').classList.toggle('active', id==='follow');
+  document.getElementById('screen-admin').classList.toggle('active', id==='admin');
 }
 
 async function loadConfig(){
@@ -533,6 +568,8 @@ document.getElementById('btn-welcome-continue').addEventListener('click', async 
   if(sbConfig.url && sbConfig.key){
     show('main');
     tryAutoOpenCamera();
+    await registerSelfInPermissions();
+    await refreshCanFollow();
   }else{
     show('settings');
   }
@@ -590,6 +627,10 @@ document.getElementById('btn-save-key').addEventListener('click', async ()=>{
   await saveConfig();
   toast('Conexión guardada');
   show('main');
+  if(userName){
+    await registerSelfInPermissions();
+    await refreshCanFollow();
+  }
 });
 
 document.getElementById('btn-shutter').addEventListener('click', ()=>{
@@ -738,6 +779,128 @@ async function listBucketObjects(limit){
 function publicUrlFor(name){
   return `${sbConfig.url}/storage/v1/object/public/${encodeURIComponent(sbConfig.bucket)}/${name}`;
 }
+
+// ---------- Permisos (panel de supervisor) ----------
+
+const ADMIN_PASSWORD = 'T3cm3l3c1!';
+
+async function registerSelfInPermissions(){
+  if(!sbConfig.url || !sbConfig.key || !userName) return;
+  const mySlug = slugify(userName);
+  try{
+    await fetch(`${sbConfig.url}/rest/v1/user_permissions?on_conflict=user_slug`, {
+      method:'POST',
+      headers:{
+        'apikey': sbConfig.key,
+        'Authorization': `Bearer ${sbConfig.key}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify({ user_slug: mySlug, user_name: userName })
+    });
+  }catch(e){ /* sin conexión; se reintentará en el próximo check de sincronización */ }
+}
+
+async function refreshCanFollow(){
+  if(!sbConfig.url || !sbConfig.key || !userName){ canFollow = false; updateFollowUI(); return; }
+  const mySlug = slugify(userName);
+  try{
+    const res = await fetch(`${sbConfig.url}/rest/v1/user_permissions?user_slug=eq.${encodeURIComponent(mySlug)}&select=can_follow`, {
+      headers:{ 'apikey': sbConfig.key, 'Authorization': `Bearer ${sbConfig.key}` }
+    });
+    if(res.ok){
+      const rows = await res.json();
+      canFollow = rows.length > 0 ? !!rows[0].can_follow : false;
+    }
+  }catch(e){ /* deja el valor anterior si falla la red */ }
+  updateFollowUI();
+}
+
+function updateFollowUI(){
+  document.getElementById('btn-activity').style.display = canFollow ? 'flex' : 'none';
+}
+
+document.getElementById('btn-open-admin').addEventListener('click', ()=>{
+  document.getElementById('input-admin-pw').value = '';
+  document.getElementById('admin-pw-error').style.display = 'none';
+  document.getElementById('admin-pw-modal').style.display = 'flex';
+  document.getElementById('input-admin-pw').focus();
+});
+
+document.getElementById('btn-admin-pw-cancel').addEventListener('click', ()=>{
+  document.getElementById('admin-pw-modal').style.display = 'none';
+});
+
+async function tryAdminPassword(){
+  const val = document.getElementById('input-admin-pw').value;
+  if(val === ADMIN_PASSWORD){
+    document.getElementById('admin-pw-modal').style.display = 'none';
+    show('admin');
+    await renderAdminList();
+  }else{
+    document.getElementById('admin-pw-error').style.display = 'block';
+    document.getElementById('input-admin-pw').value = '';
+    document.getElementById('input-admin-pw').focus();
+  }
+}
+document.getElementById('btn-admin-pw-submit').addEventListener('click', tryAdminPassword);
+document.getElementById('input-admin-pw').addEventListener('keydown', (e)=>{ if(e.key === 'Enter') tryAdminPassword(); });
+document.getElementById('btn-back-from-admin').addEventListener('click', ()=> show('main'));
+
+async function renderAdminList(){
+  const list = document.getElementById('admin-permissions-list');
+  list.innerHTML = '<div class="hint" style="text-align:left;">Cargando usuarios…</div>';
+  if(!sbConfig.url || !sbConfig.key){
+    list.innerHTML = '<div class="hint" style="text-align:left;">Primero conecta Supabase en ⚙ ajustes.</div>';
+    return;
+  }
+  try{
+    const res = await fetch(`${sbConfig.url}/rest/v1/user_permissions?select=user_slug,user_name,can_follow&order=user_name.asc`, {
+      headers:{ 'apikey': sbConfig.key, 'Authorization': `Bearer ${sbConfig.key}` }
+    });
+    if(!res.ok) throw new Error('fetch failed');
+    const rows = await res.json();
+    list.innerHTML = '';
+    if(!rows.length){
+      list.innerHTML = '<div class="hint" style="text-align:left;">Todavía no hay usuarios registrados (aparecen aquí en cuanto alguien abre la app por primera vez).</div>';
+      return;
+    }
+    rows.forEach(row=>{
+      const el = document.createElement('label');
+      el.className = 'contact-row';
+      el.style.cursor = 'pointer';
+      el.innerHTML = `
+        <div class="avatar">👤</div>
+        <div class="who" style="flex:1;"><div class="n">${row.user_name || row.user_slug}</div></div>
+        <input type="checkbox" data-slug="${row.user_slug}" ${row.can_follow ? 'checked' : ''} style="width:20px; height:20px;">
+      `;
+      list.appendChild(el);
+    });
+  }catch(e){
+    list.innerHTML = '<div class="hint" style="text-align:left; color:var(--danger);">No se pudo cargar la lista. Revisa tu conexión.</div>';
+  }
+}
+
+document.getElementById('btn-save-admin').addEventListener('click', async ()=>{
+  const checkboxes = [...document.querySelectorAll('#admin-permissions-list input[type=checkbox]')];
+  let ok = true;
+  for(const cb of checkboxes){
+    try{
+      await fetch(`${sbConfig.url}/rest/v1/user_permissions?user_slug=eq.${encodeURIComponent(cb.dataset.slug)}`, {
+        method:'PATCH',
+        headers:{
+          'apikey': sbConfig.key,
+          'Authorization': `Bearer ${sbConfig.key}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify({ can_follow: cb.checked })
+      });
+    }catch(e){ ok = false; }
+  }
+  toast(ok ? 'Permisos guardados' : 'Algunos cambios no se pudieron guardar, revisa tu conexión');
+  refreshCanFollow();
+});
 
 // ---------- "A quién sigo" ----------
 
@@ -909,9 +1072,9 @@ async function checkFollowedUploads(){
   }
 }
 
-setInterval(()=> checkFollowedUploads(), 90 * 1000);
+setInterval(()=> { if(canFollow) checkFollowedUploads(); }, 90 * 1000);
 document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState === 'visible') checkFollowedUploads();
+  if(document.visibilityState === 'visible' && canFollow) checkFollowedUploads();
 });
 
 document.getElementById('btn-confirm').addEventListener('click', async ()=>{
@@ -1098,6 +1261,7 @@ async function init(){
   await loadConfig();
   renderGallery();
   await updatePendingBadge();
+  document.getElementById('btn-activity').style.display = 'none';
   if(!userName){
     show('welcome');
   }else if(!sbConfig.url || !sbConfig.key){
@@ -1108,7 +1272,11 @@ async function init(){
   }
   setupReminders();
   trySyncPendingUploads();
-  checkFollowedUploads();
+  if(userName && sbConfig.url && sbConfig.key){
+    await registerSelfInPermissions();
+    await refreshCanFollow();
+    if(canFollow) checkFollowedUploads();
+  }
 }
 init();
 
