@@ -1116,11 +1116,15 @@ function loadTesseract(){
   });
 }
 
+const OCR_TIMEOUT_MS = 10000; // límite de tiempo para el análisis de texto
+
 async function extractTextFromPhoto(file){
   try{
     await loadTesseract();
-    const result = await Tesseract.recognize(file, 'eng');
-    return (result && result.data && result.data.text) ? result.data.text : '';
+    const recognizePromise = Tesseract.recognize(file, 'eng')
+      .then(result => (result && result.data && result.data.text) ? result.data.text : '');
+    const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(''), OCR_TIMEOUT_MS));
+    return await Promise.race([recognizePromise, timeoutPromise]);
   }catch(e){
     console.error('OCR error', e);
     return '';
