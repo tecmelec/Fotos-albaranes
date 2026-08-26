@@ -1064,7 +1064,7 @@ async function checkFollowedUploads(){
     try{
       if('serviceWorker' in navigator){
         const reg = await navigator.serviceWorker.ready;
-        await reg.showNotification(title, { body, icon:'./icon-192.png', badge:'./icon-192.png', image: publicUrlFor(newOnes[0].name), tag:'follow-activity' });
+        await reg.showNotification(title, { body, icon:'./icon-192.png', badge:'./icon-192.png', image: publicUrlFor(newOnes[0].name), tag:'follow-activity', data:{ screen:'activity' } });
       }else{
         new Notification(title, { body, icon:'./icon-192.png' });
       }
@@ -1365,6 +1365,13 @@ async function fireReminderNotification(){
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  });
+  navigator.serviceWorker.addEventListener('message', async (event)=>{
+    if(event.data && event.data.type === 'navigate' && event.data.screen === 'activity'){
+      document.getElementById('activity-dot').style.display = 'none';
+      await renderActivityList();
+      show('activity');
+    }
   });
 }
 </script>

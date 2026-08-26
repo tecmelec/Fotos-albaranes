@@ -72,3 +72,26 @@ async function checkAndNotify(){
     tag: 'albaranes-reminder'
   });
 }
+
+// Al tocar cualquier notificación: enfoca la app si ya está abierta en una
+// pestaña, o abre una nueva si no. Si la notificación trae data.screen,
+// le avisa a la página que navegue directo a esa pantalla (ej. Actividad).
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetScreen = event.notification.data && event.notification.data.screen;
+
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ('focus' in client) {
+          client.focus();
+          if (targetScreen) client.postMessage({ type: 'navigate', screen: targetScreen });
+          return;
+        }
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow('./index.html');
+      }
+    })
+  );
+});
