@@ -186,7 +186,13 @@
 <div class="shell">
   <header>
     <div class="brand"><span class="dot"></span><h1>Alb. Tecmelec</h1></div>
-    <button class="gear" id="btn-settings">⚙</button>
+    <div style="display:flex; gap:8px;">
+      <button class="gear" id="btn-activity" style="position:relative;">
+        🔔
+        <span id="activity-dot" style="display:none; position:absolute; top:4px; right:4px; width:9px; height:9px; border-radius:50%; background:var(--danger); border:1.5px solid var(--bg);"></span>
+      </button>
+      <button class="gear" id="btn-settings">⚙</button>
+    </div>
   </header>
 
   <!-- PASSWORD MODAL -->
@@ -286,6 +292,35 @@
       </div>
       <div class="actions">
         <button class="btn btn-ghost" id="btn-save-username">Guardar nombre</button>
+      </div>
+    </div>
+
+    <!-- ACTIVITY SCREEN -->
+    <div class="screen" id="screen-activity">
+      <button class="btn-back-link" id="btn-back-from-activity">‹ Volver</button>
+      <div class="step-label">Actividad</div>
+      <div class="step-title" style="font-size:19px; margin-bottom:6px;">Fotos de quienes sigues</div>
+      <div class="hint" style="text-align:left; margin-top:0; margin-bottom:16px;">
+        Se revisa automáticamente mientras tienes la app abierta.
+      </div>
+      <div id="activity-list"></div>
+      <div class="actions" style="margin-top:18px;">
+        <button class="btn btn-ghost" id="btn-go-follow">👥 Editar a quién sigo</button>
+      </div>
+    </div>
+
+    <!-- FOLLOW SETTINGS SCREEN -->
+    <div class="screen" id="screen-follow">
+      <button class="btn-back-link" id="btn-back-from-follow">‹ Volver</button>
+      <div class="step-label">Seguir a compañeros</div>
+      <div class="step-title" style="font-size:19px; margin-bottom:6px;">¿A quién quieres seguir?</div>
+      <div class="hint" style="text-align:left; margin-top:0; margin-bottom:16px;">
+        Recibirás un aviso cuando alguno de ellos suba una foto nueva. Solo aparecen personas que ya han
+        subido al menos una foto con la app.
+      </div>
+      <div id="follow-list"></div>
+      <div class="actions">
+        <button class="btn btn-primary" id="btn-save-follow">Guardar</button>
       </div>
     </div>
 
@@ -441,6 +476,8 @@ function show(id){
   document.getElementById('screen-welcome').classList.toggle('active', id==='welcome');
   document.getElementById('screen-main').classList.toggle('active', id==='main');
   document.getElementById('screen-settings').classList.toggle('active', id==='settings');
+  document.getElementById('screen-activity').classList.toggle('active', id==='activity');
+  document.getElementById('screen-follow').classList.toggle('active', id==='follow');
 }
 
 async function loadConfig(){
@@ -672,6 +709,211 @@ function slugify(text){
     .slice(0, 40);
 }
 
+function labelFromSlug(slug){
+  if(!slug) return 'Desconocido';
+  return slug.split('-').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function parseFileName(name){
+  const withoutExt = name.replace(/\.[a-zA-Z0-9]+$/, '');
+  const parts = withoutExt.split('_');
+  if(parts.length < 4) return null;
+  return { datePart: parts[0], namePart: parts[1], streetPart: parts[2], code: parts[3] };
+}
+
+async function listBucketObjects(limit){
+  const res = await fetch(`${sbConfig.url}/storage/v1/object/list/${encodeURIComponent(sbConfig.bucket)}`, {
+    method:'POST',
+    headers:{
+      'apikey': sbConfig.key,
+      'Authorization': `Bearer ${sbConfig.key}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ prefix:'', limit, sortBy:{ column:'created_at', order:'desc' } })
+  });
+  if(!res.ok) throw new Error('list failed ' + res.status);
+  return await res.json();
+}
+
+function publicUrlFor(name){
+  return `${sbConfig.url}/storage/v1/object/public/${encodeURIComponent(sbConfig.bucket)}/${name}`;
+}
+
+// ---------- "A quién sigo" ----------
+
+document.getElementById('btn-go-follow').addEventListener('click', async ()=>{
+  document.getElementById('follow-list').innerHTML = '<div class="hint" style="text-align:left;">Buscando compañeros…</div>';
+  show('follow');
+  await renderFollowList();
+});
+
+document.getElementById('btn-back-from-follow').addEventListener('click', ()=> show('activity'));
+
+async function getFollowedUsers(){
+  try{
+    const res = await localStore.get('followedUsers');
+    return res && res.value ? JSON.parse(res.value) : [];
+  }catch(e){ return []; }
+}
+
+async function renderFollowList(){
+  const list = document.getElementById('follow-list');
+  if(!sbConfig.url || !sbConfig.key){
+    list.innerHTML = '<div class="hint" style="text-align:left;">Primero conecta Supabase en ⚙ ajustes.</div>';
+    return;
+  }
+  let objects = [];
+  try{
+    objects = await listBucketObjects(200);
+  }catch(e){
+    list.innerHTML = '<div class="hint" style="text-align:left; color:var(--danger);">No se pudo cargar la lista. Revisa tu conexión.</div>';
+    return;
+  }
+
+  const mySlug = slugify(userName);
+  const uniqueSlugs = new Set();
+  objects.forEach(o=>{
+    const parsed = parseFileName(o.name);
+    if(parsed && parsed.namePart && parsed.namePart !== mySlug){
+      uniqueSlugs.add(parsed.namePart);
+    }
+  });
+
+  const followed = await getFollowedUsers();
+  list.innerHTML = '';
+  if(!uniqueSlugs.size){
+    list.innerHTML = '<div class="hint" style="text-align:left;">Todavía no hay otros compañeros que hayan subido fotos.</div>';
+    return;
+  }
+  [...uniqueSlugs].sort().forEach(slug=>{
+    const row = document.createElement('label');
+    row.className = 'contact-row';
+    row.style.cursor = 'pointer';
+    row.innerHTML = `
+      <div class="avatar">👤</div>
+      <div class="who" style="flex:1;"><div class="n">${labelFromSlug(slug)}</div></div>
+      <input type="checkbox" data-slug="${slug}" ${followed.includes(slug) ? 'checked' : ''} style="width:20px; height:20px;">
+    `;
+    list.appendChild(row);
+  });
+}
+
+document.getElementById('btn-save-follow').addEventListener('click', async ()=>{
+  const checked = [...document.querySelectorAll('#follow-list input[type=checkbox]:checked')].map(el => el.dataset.slug);
+  await localStore.set('followedUsers', JSON.stringify(checked));
+  const existingCheck = await localStore.get('lastFollowCheck');
+  if(!existingCheck){
+    await localStore.set('lastFollowCheck', String(Date.now()));
+  }
+  toast('Guardado');
+  show('activity');
+  checkFollowedUploads();
+});
+
+// ---------- Actividad ----------
+
+document.getElementById('btn-activity').addEventListener('click', async ()=>{
+  document.getElementById('activity-dot').style.display = 'none';
+  await renderActivityList();
+  show('activity');
+});
+document.getElementById('btn-back-from-activity').addEventListener('click', ()=> show('main'));
+
+async function getActivityFeed(){
+  try{
+    const res = await localStore.get('activityFeed');
+    return res && res.value ? JSON.parse(res.value) : [];
+  }catch(e){ return []; }
+}
+
+async function renderActivityList(){
+  const list = document.getElementById('activity-list');
+  const activity = await getActivityFeed();
+  if(!activity.length){
+    list.innerHTML = '<div class="hint" style="text-align:left;">Todavía no hay actividad de las personas que sigues.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  activity.forEach(item=>{
+    const row = document.createElement('a');
+    row.href = item.url;
+    row.target = '_blank';
+    row.style.cssText = 'display:flex; gap:12px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:10px; margin-bottom:10px; text-decoration:none; color:var(--text);';
+    const when = new Date(item.time);
+    const whenStr = when.toLocaleDateString('es-ES', { day:'2-digit', month:'2-digit' }) + ' · ' + when.toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit' });
+    row.innerHTML = `
+      <img src="${item.url}" style="width:56px; height:56px; object-fit:cover; border-radius:10px; flex-shrink:0;" alt="Foto">
+      <div style="min-width:0;">
+        <div style="font-size:14px; font-weight:600;">${item.uploader}</div>
+        <div style="font-size:12px; color:var(--text-dim);">${whenStr}</div>
+      </div>
+    `;
+    list.appendChild(row);
+  });
+}
+
+async function checkFollowedUploads(){
+  if(!sbConfig.url || !sbConfig.key) return;
+  const followed = await getFollowedUsers();
+  if(!followed.length) return;
+
+  let lastChecked = 0;
+  try{
+    const res = await localStore.get('lastFollowCheck');
+    lastChecked = res && res.value ? parseInt(res.value, 10) : 0;
+  }catch(e){}
+  const now = Date.now();
+
+  let objects;
+  try{
+    objects = await listBucketObjects(100);
+  }catch(e){ return; }
+
+  const newOnes = objects.filter(o=>{
+    const parsed = parseFileName(o.name);
+    if(!parsed || !followed.includes(parsed.namePart)) return false;
+    const createdAt = new Date(o.created_at).getTime();
+    return createdAt > lastChecked;
+  });
+
+  await localStore.set('lastFollowCheck', String(now));
+  if(!newOnes.length) return;
+
+  let activity = await getActivityFeed();
+  newOnes.forEach(o=>{
+    const parsed = parseFileName(o.name);
+    activity.unshift({
+      name: o.name,
+      uploader: labelFromSlug(parsed.namePart),
+      url: publicUrlFor(o.name),
+      time: o.created_at
+    });
+  });
+  activity = activity.slice(0, 30);
+  await localStore.set('activityFeed', JSON.stringify(activity));
+
+  document.getElementById('activity-dot').style.display = 'block';
+
+  if('Notification' in window && Notification.permission === 'granted'){
+    const names = [...new Set(newOnes.map(o => labelFromSlug(parseFileName(o.name).namePart)))];
+    const title = newOnes.length === 1 ? `📸 Nueva foto de ${names[0]}` : `📸 ${newOnes.length} fotos nuevas`;
+    const body = names.join(', ');
+    try{
+      if('serviceWorker' in navigator){
+        const reg = await navigator.serviceWorker.ready;
+        await reg.showNotification(title, { body, icon:'./icon-192.png', badge:'./icon-192.png', image: publicUrlFor(newOnes[0].name), tag:'follow-activity' });
+      }else{
+        new Notification(title, { body, icon:'./icon-192.png' });
+      }
+    }catch(e){}
+  }
+}
+
+setInterval(()=> checkFollowedUploads(), 90 * 1000);
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible') checkFollowedUploads();
+});
+
 document.getElementById('btn-confirm').addEventListener('click', async ()=>{
   if(!currentFile) return;
   if(!sbConfig.url || !sbConfig.key){
@@ -866,6 +1108,7 @@ async function init(){
   }
   setupReminders();
   trySyncPendingUploads();
+  checkFollowedUploads();
 }
 init();
 
