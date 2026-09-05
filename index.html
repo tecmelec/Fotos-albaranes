@@ -604,7 +604,15 @@ document.getElementById('btn-save-username').addEventListener('click', async ()=
   toast('Nombre guardado');
 });
 
-const SETTINGS_PASSWORD = '9999';
+// Se guarda el hash (huella digital) de la contraseña, no el texto en claro,
+// para que no aparezca visible al inspeccionar el código fuente de la página.
+const SETTINGS_PASSWORD_HASH = '888df25ae35772424a560c7152a1de794440e0ea5cfee62828333a456a506e05';
+
+async function sha256Hex(text){
+  const enc = new TextEncoder().encode(text);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 document.getElementById('btn-settings').addEventListener('click', ()=>{
   document.getElementById('input-pw').value = '';
@@ -617,9 +625,10 @@ document.getElementById('btn-pw-cancel').addEventListener('click', ()=>{
   document.getElementById('pw-modal').style.display = 'none';
 });
 
-function trySettingsPassword(){
+async function trySettingsPassword(){
   const val = document.getElementById('input-pw').value;
-  if(val === SETTINGS_PASSWORD){
+  const hash = await sha256Hex(val);
+  if(hash === SETTINGS_PASSWORD_HASH){
     document.getElementById('pw-modal').style.display = 'none';
     document.getElementById('input-sb-url').value = sbConfig.url;
     document.getElementById('input-sb-key').value = sbConfig.key;
@@ -803,7 +812,7 @@ function publicUrlFor(name){
 
 // ---------- Permisos (panel de supervisor) ----------
 
-const ADMIN_PASSWORD = 'T3cm3l3c1!';
+const ADMIN_PASSWORD_HASH = '2df5b70108f31f3078ffbb16cad50a23b7c137db0cfef36655c5161ea14a5ed5';
 
 async function registerSelfInPermissions(){
   if(!sbConfig.url || !sbConfig.key || !userName) return;
@@ -854,7 +863,8 @@ document.getElementById('btn-admin-pw-cancel').addEventListener('click', ()=>{
 
 async function tryAdminPassword(){
   const val = document.getElementById('input-admin-pw').value;
-  if(val === ADMIN_PASSWORD){
+  const hash = await sha256Hex(val);
+  if(hash === ADMIN_PASSWORD_HASH){
     document.getElementById('admin-pw-modal').style.display = 'none';
     show('admin');
     await renderAdminList();
