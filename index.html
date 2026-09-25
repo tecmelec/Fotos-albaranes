@@ -247,6 +247,7 @@
         <div id="code-overlay" style="display:none; position:absolute; inset:0; background:rgba(16,16,18,0.72); align-items:center; justify-content:center; text-align:center; padding:24px; flex-direction:column; gap:12px;">
           <div style="font-size:15px; color:#f2efe9; line-height:1.4; max-width:280px;">Escribe este número en el albarán que se lleva el proveedor:</div>
           <div id="code-overlay-value" style="font-size:32px; font-weight:800; letter-spacing:0.05em; background:#e84cc4; color:#101012; padding:6px 18px; border-radius:10px;"></div>
+          <div id="code-overlay-status" style="font-size:12.5px; color:var(--text-dim);"></div>
         </div>
       </div>
 
@@ -258,9 +259,6 @@
       <div class="control-row" id="row-confirm" style="display:none;">
         <button class="round-btn retake" id="btn-retake">✕</button>
         <button class="round-btn confirm" id="btn-confirm">✓</button>
-      </div>
-      <div class="control-row" id="row-uploading" style="display:none;">
-        <div class="hint" id="uploading-status-text" style="margin:0;">Guardando en Supabase…</div>
       </div>
 
       <div class="hint" id="main-hint">Toca el disparador para tomar la foto</div>
@@ -422,6 +420,8 @@ let currentUrl = null;
 let currentLocation = null;
 let currentPhotoCode = null;
 let isSyncingQueue = false;
+let captureGeneration = 0;
+let activeCapture = null;
 
 const OFFLINE_DB_NAME = 'disparo-offline-db';
 const OFFLINE_STORE_NAME = 'pendingUploads';
@@ -468,6 +468,14 @@ async function deletePendingUpload(id){
     tx.oncomplete = ()=> resolve();
     tx.onerror = ()=> reject(tx.error);
   });
+}
+
+async function deletePendingUploadByFileName(fileName){
+  try{
+    const all = await getPendingUploads();
+    const match = all.find(x => x.fileName === fileName);
+    if(match) await deletePendingUpload(match.id);
+  }catch(e){ /* best-effort */ }
 }
 
 async function updatePendingBadge(){
@@ -686,51 +694,79 @@ document.getElementById('camera-input').addEventListener('change', (e)=>{
   document.getElementById('row-shutter').style.display = 'none';
   document.getElementById('row-confirm').style.display = 'flex';
   document.getElementById('success-badge').style.display = 'none';
-  document.getElementById('main-hint').innerHTML = '✕ repetir &nbsp;·&nbsp; ✓ guardar en Supabase';
+  document.getElementById('main-hint').innerHTML = '✕ descartar &nbsp;·&nbsp; ✓ lista, tomar otra';
 
   currentPhotoCode = generatePhotoCode();
   document.getElementById('code-overlay-value').textContent = currentPhotoCode;
   document.getElementById('code-overlay').style.display = 'flex';
 
+  // La foto empieza a guardarse sola en cuanto se toma, sin esperar a que
+  // se toque ningún botón — así no se pierde si la persona cierra la app
+  // en esta pantalla. Los botones de abajo solo sirven para descartar
+  // (✕) o para pasar a tomar la siguiente foto (✓); la subida en sí ya
+  // no depende de ellos.
+  captureGeneration++;
+  const capture = {
+    gen: captureGeneration,
+    code: currentPhotoCode,
+    fileName: null,
+    uploadedUrl: null,
+    discarded: false,
+    queued: false,
+    done: false
+  };
+  activeCapture = capture;
+  setCaptureStatus(capture, 'Guardando automáticamente…');
+
   currentLocation = null;
   document.getElementById('location-status').style.display = 'none';
-  document.getElementById('btn-confirm').disabled = true;
-  document.getElementById('btn-confirm').style.opacity = '0.4';
-  requestLocation();
+  document.getElementById('btn-confirm').disabled = false;
+  document.getElementById('btn-confirm').style.opacity = '1';
+  document.getElementById('btn-retake').disabled = false;
+  document.getElementById('btn-retake').style.opacity = '1';
+
+  const locationPromise = requestLocation();
+  runAutoUpload(capture, file, locationPromise);
 });
 
 function generatePhotoCode(){
   return Date.now().toString().slice(-5);
 }
 
+function setCaptureStatus(capture, text){
+  // Ignora actualizaciones de una captura antigua que ya no es la que se
+  // ve en pantalla (por ejemplo, si la persona ya tomó otra foto nueva).
+  if(!capture || capture.gen !== captureGeneration) return;
+  const el = document.getElementById('code-overlay-status');
+  if(el) el.textContent = text;
+}
+
 function requestLocation(){
-  const confirmBtn = document.getElementById('btn-confirm');
-  if(!navigator.geolocation){
-    showLocationStatus('Este navegador no soporta ubicación', true);
-    return;
-  }
-  showLocationStatus('Obteniendo ubicación…', false);
-  confirmBtn.disabled = true;
-  confirmBtn.style.opacity = '0.4';
-  navigator.geolocation.getCurrentPosition(
-    (pos)=>{
-      currentLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
-      showLocationStatus('📍 Ubicación lista', false);
-      confirmBtn.disabled = false;
-      confirmBtn.style.opacity = '1';
-    },
-    (err)=>{
-      currentLocation = null;
-      let msg = 'Ubicación no disponible — se guardará sin ella';
-      if(err && err.code === 1) msg = 'Permiso de ubicación bloqueado — se guardará sin ella';
-      if(err && err.code === 2) msg = 'Sin señal GPS — se guardará sin ubicación';
-      if(err && err.code === 3) msg = 'Tardó demasiado — se guardará sin ubicación';
-      showLocationStatus(msg, true);
-      confirmBtn.disabled = false;
-      confirmBtn.style.opacity = '1';
-    },
-    { enableHighAccuracy:true, timeout:15000, maximumAge:60000 }
-  );
+  return new Promise((resolve)=>{
+    if(!navigator.geolocation){
+      showLocationStatus('Este navegador no soporta ubicación', true);
+      resolve();
+      return;
+    }
+    showLocationStatus('Obteniendo ubicación…', false);
+    navigator.geolocation.getCurrentPosition(
+      (pos)=>{
+        currentLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        showLocationStatus('📍 Ubicación lista', false);
+        resolve();
+      },
+      (err)=>{
+        currentLocation = null;
+        let msg = 'Ubicación no disponible — se guardará sin ella';
+        if(err && err.code === 1) msg = 'Permiso de ubicación bloqueado — se guardará sin ella';
+        if(err && err.code === 2) msg = 'Sin señal GPS — se guardará sin ubicación';
+        if(err && err.code === 3) msg = 'Tardó demasiado — se guardará sin ubicación';
+        showLocationStatus(msg, true);
+        resolve();
+      },
+      { enableHighAccuracy:true, timeout:15000, maximumAge:60000 }
+    );
+  });
 }
 
 function showLocationStatus(text, isWarning){
@@ -767,9 +803,30 @@ async function resolveLocationInfo(){
 }
 
 document.getElementById('btn-retake').addEventListener('click', ()=>{
+  discardCurrentCapture();
   document.getElementById('camera-input').value = '';
   resetToShutter();
 });
+
+function discardCurrentCapture(){
+  const capture = activeCapture;
+  if(!capture) return;
+  capture.discarded = true;
+  // Intenta limpiar lo que ya se llegó a guardar (mejor esfuerzo: si el
+  // borrado falla por conexión o por falta del permiso DELETE en Supabase,
+  // la foto simplemente se queda guardada — no rompe nada, solo queda de más).
+  if(capture.done && capture.fileName){
+    deleteFromSupabase(capture.fileName);
+    if(capture.uploadedUrl){
+      recentPhotos = recentPhotos.filter(u => u !== capture.uploadedUrl);
+      saveRecentPhotos().then(renderGallery);
+    }
+  }else if(capture.queued && capture.fileName){
+    deletePendingUploadByFileName(capture.fileName).then(updatePendingBadge);
+  }
+  // Si todavía está en curso (ni "done" ni "queued"), runAutoUpload
+  // comprobará capture.discarded en cuanto termine y hará la limpieza sola.
+}
 
 function slugify(text){
   if(!text) return '';
@@ -1291,65 +1348,79 @@ async function checkKeywordMatches(){
   }
 }
 
-document.getElementById('btn-confirm').addEventListener('click', async ()=>{
-  if(!currentFile) return;
+// El botón verde ya NO dispara el guardado — eso empieza solo, en cuanto
+// se toma la foto (ver runAutoUpload, llamado desde el listener de
+// camera-input). Aquí solo se limpia la pantalla para la siguiente foto.
+document.getElementById('btn-confirm').addEventListener('click', ()=>{
+  resetToShutter();
+});
+
+async function runAutoUpload(capture, file, locationPromise){
   if(!sbConfig.url || !sbConfig.key){
-    toast('Falta conectar Supabase. Ve a ⚙ ajustes.');
-    show('settings');
+    setCaptureStatus(capture, '⚠️ Falta conectar Supabase (⚙ ajustes)');
     return;
   }
-  setUploading(true);
-  document.getElementById('code-overlay').style.display = 'none';
-  document.getElementById('uploading-status-text').textContent = 'Analizando texto…';
   try{
-    const locationInfo = await resolveLocationInfo();
-    const watermarkedFile = await addWatermark(currentFile, locationInfo.label);
-    const fileName = buildFileName(locationInfo.street, currentFile);
-    const extractedText = navigator.onLine ? await extractTextFromPhoto(currentFile) : '';
+    await locationPromise; // espera a que el GPS responda o falle, lo que pase antes
+    if(capture.discarded) return;
 
-    document.getElementById('uploading-status-text').textContent = 'Guardando en Supabase…';
+    const locationInfo = await resolveLocationInfo();
+    const watermarkedFile = await addWatermark(file, locationInfo.label);
+    const fileName = buildFileName(locationInfo.street, file, capture.code);
+    capture.fileName = fileName;
+    if(capture.discarded) return; // se descartó antes de que hubiera nada que subir
+
+    setCaptureStatus(capture, 'Analizando texto…');
+    const extractedText = navigator.onLine ? await extractTextFromPhoto(file) : '';
+    if(capture.discarded) return;
+
+    setCaptureStatus(capture, 'Guardando en Supabase…');
 
     if(!navigator.onLine){
       await queuePendingUpload(fileName, watermarkedFile);
       await updatePendingBadge();
-      toast('📴 Sin conexión: la foto quedó guardada en el teléfono y se subirá sola cuando vuelva el internet.');
-      resetToShutter();
+      capture.queued = true;
+      if(capture.discarded){ await deletePendingUploadByFileName(fileName); await updatePendingBadge(); return; }
+      setCaptureStatus(capture, '📴 Guardada en el teléfono, se subirá sola con internet');
       return;
     }
 
     try{
       const url = await uploadToSupabase(watermarkedFile, sbConfig, fileName);
       await saveExtractedText(fileName, extractedText);
+      capture.uploadedUrl = url;
+      capture.done = true;
+      if(capture.discarded){ await deleteFromSupabase(fileName); return; }
+
       recentPhotos.unshift(url);
       recentPhotos = recentPhotos.slice(0,9);
       await saveRecentPhotos();
       document.getElementById('last-url').href = url;
       document.getElementById('success-badge').style.display = 'flex';
       renderGallery();
-      resetToShutter();
+      setCaptureStatus(capture, '✓ Guardada en Supabase');
     }catch(uploadErr){
       // Falló la subida aunque parecía haber conexión (red inestable, etc.)
       console.error(uploadErr);
       await queuePendingUpload(fileName, watermarkedFile);
       await updatePendingBadge();
-      toast('📴 No se pudo subir ahora. La foto quedó guardada en el teléfono y se reintentará sola.');
-      resetToShutter();
+      capture.queued = true;
+      if(capture.discarded){ await deletePendingUploadByFileName(fileName); await updatePendingBadge(); return; }
+      setCaptureStatus(capture, '📴 No se pudo subir ahora, se reintentará sola');
     }
   }catch(err){
     console.error(err);
-    toast('No se pudo procesar la foto. Intenta de nuevo.');
-  }finally{
-    setUploading(false);
+    setCaptureStatus(capture, 'No se pudo procesar la foto');
   }
-});
+}
 
-function buildFileName(street, file){
+function buildFileName(street, file, code){
   const now = new Date();
   const datePart = now.toISOString().slice(0,10); // YYYY-MM-DD
   const namePart = slugify(userName) || 'sin-nombre';
   const streetPart = slugify(street) || 'sin-direccion';
   const ext = (file.type && file.type.split('/')[1]) ? file.type.split('/')[1] : 'jpg';
-  const uniqueSuffix = currentPhotoCode || Date.now().toString().slice(-5);
+  const uniqueSuffix = code || Date.now().toString().slice(-5);
   return `${datePart}_${namePart}_${streetPart}_${uniqueSuffix}.${ext}`;
 }
 
@@ -1429,17 +1500,14 @@ async function addWatermark(file, locationLabel){
   });
 }
 
-function setUploading(isUploading){
-  document.getElementById('row-confirm').style.display = isUploading ? 'none' : 'flex';
-  document.getElementById('row-uploading').style.display = isUploading ? 'flex' : 'none';
-}
-
 function resetToShutter(){
   currentFile = null;
   currentPhotoCode = null;
+  activeCapture = null;
   document.getElementById('camera-input').value = '';
   document.getElementById('preview-img').style.display = 'none';
   document.getElementById('code-overlay').style.display = 'none';
+  document.getElementById('code-overlay-status').textContent = '';
   document.getElementById('vf-placeholder').style.display = 'block';
   document.getElementById('row-shutter').style.display = 'flex';
   document.getElementById('row-confirm').style.display = 'none';
@@ -1447,6 +1515,8 @@ function resetToShutter(){
   document.getElementById('location-status').style.display = 'none';
   document.getElementById('btn-confirm').disabled = false;
   document.getElementById('btn-confirm').style.opacity = '1';
+  document.getElementById('btn-retake').disabled = false;
+  document.getElementById('btn-retake').style.opacity = '1';
 }
 
 async function uploadToSupabase(file, config, fileName){
@@ -1466,6 +1536,25 @@ async function uploadToSupabase(file, config, fileName){
     throw new Error('Upload failed: ' + res.status + ' ' + errText);
   }
   return `${config.url}/storage/v1/object/public/${encodeURIComponent(config.bucket)}/${path}`;
+}
+
+async function deleteFromSupabase(fileName){
+  // Mejor esfuerzo: si no hay conexión en ese momento, o si el bucket no
+  // tiene una política RLS de DELETE para el rol anon, esto simplemente no
+  // hace nada — la foto se queda guardada en Supabase (no rompe la app,
+  // solo queda una foto de más que se puede borrar a mano si hace falta).
+  if(!sbConfig.url || !sbConfig.key) return;
+  try{
+    await fetch(`${sbConfig.url}/storage/v1/object/${encodeURIComponent(sbConfig.bucket)}`, {
+      method:'DELETE',
+      headers:{
+        'apikey': sbConfig.key,
+        'Authorization': `Bearer ${sbConfig.key}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ prefixes: [fileName] })
+    });
+  }catch(e){ /* best-effort */ }
 }
 
 function toast(msg){
