@@ -425,14 +425,21 @@ let activeCapture = null;
 
 const OFFLINE_DB_NAME = 'disparo-offline-db';
 const OFFLINE_STORE_NAME = 'pendingUploads';
+// Guarda la foto en crudo (sin marca de agua, sin OCR) en cuanto se conoce la
+// ubicación — así, si la app se cierra a media faena, nada se pierde: al
+// reabrir, resumePendingCaptures() retoma el análisis y la subida solos.
+const CAPTURES_STORE_NAME = 'pendingCaptures';
 
 function openOfflineDB(){
   return new Promise((resolve, reject)=>{
-    const req = indexedDB.open(OFFLINE_DB_NAME, 1);
+    const req = indexedDB.open(OFFLINE_DB_NAME, 2);
     req.onupgradeneeded = ()=>{
       const db = req.result;
       if(!db.objectStoreNames.contains(OFFLINE_STORE_NAME)){
         db.createObjectStore(OFFLINE_STORE_NAME, { keyPath:'id', autoIncrement:true });
+      }
+      if(!db.objectStoreNames.contains(CAPTURES_STORE_NAME)){
+        db.createObjectStore(CAPTURES_STORE_NAME, { keyPath:'id', autoIncrement:true });
       }
     };
     req.onsuccess = ()=> resolve(req.result);
@@ -440,14 +447,47 @@ function openOfflineDB(){
   });
 }
 
-async function queuePendingUpload(fileName, blob){
+async function queuePendingUpload(fileName, blob, extractedText){
   const db = await openOfflineDB();
   return new Promise((resolve, reject)=>{
     const tx = db.transaction(OFFLINE_STORE_NAME, 'readwrite');
-    tx.objectStore(OFFLINE_STORE_NAME).add({ fileName, blob, createdAt: Date.now() });
+    tx.objectStore(OFFLINE_STORE_NAME).add({ fileName, blob, extractedText: extractedText || '', createdAt: Date.now() });
     tx.oncomplete = ()=> resolve();
     tx.onerror = ()=> reject(tx.error);
   });
+}
+
+async function saveRawCapture(record){
+  const db = await openOfflineDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(CAPTURES_STORE_NAME, 'readwrite');
+    const req = tx.objectStore(CAPTURES_STORE_NAME).add(record);
+    req.onsuccess = ()=> resolve(req.result); // id generado
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+
+async function getRawCaptures(){
+  const db = await openOfflineDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(CAPTURES_STORE_NAME, 'readonly');
+    const req = tx.objectStore(CAPTURES_STORE_NAME).getAll();
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+async function deleteRawCapture(id){
+  if(id === undefined || id === null) return;
+  try{
+    const db = await openOfflineDB();
+    await new Promise((resolve, reject)=>{
+      const tx = db.transaction(CAPTURES_STORE_NAME, 'readwrite');
+      tx.objectStore(CAPTURES_STORE_NAME).delete(id);
+      tx.oncomplete = ()=> resolve();
+      tx.onerror = ()=> reject(tx.error);
+    });
+  }catch(e){ /* best-effort */ }
 }
 
 async function getPendingUploads(){
@@ -501,6 +541,7 @@ async function trySyncPendingUploads(){
     for(const item of pending){
       try{
         const url = await uploadToSupabase(item.blob, sbConfig, item.fileName);
+        if(item.extractedText) await saveExtractedText(item.fileName, item.extractedText);
         await deletePendingUpload(item.id);
         recentPhotos.unshift(url);
         recentPhotos = recentPhotos.slice(0,9);
@@ -518,10 +559,14 @@ async function trySyncPendingUploads(){
 document.getElementById('btn-retry-sync').addEventListener('click', ()=>{
   toast('Buscando conexión…');
   trySyncPendingUploads();
+  resumePendingCaptures();
 });
 
-window.addEventListener('online', ()=> trySyncPendingUploads());
-setInterval(()=> trySyncPendingUploads(), 2 * 60 * 1000);
+window.addEventListener('online', ()=> { trySyncPendingUploads(); resumePendingCaptures(); });
+setInterval(()=> { trySyncPendingUploads(); resumePendingCaptures(); }, 2 * 60 * 1000);
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible'){ trySyncPendingUploads(); resumePendingCaptures(); }
+});
 let recentPhotos = [];
 let lastReminderKey = null;
 let userName = '';
@@ -823,9 +868,14 @@ function discardCurrentCapture(){
     }
   }else if(capture.queued && capture.fileName){
     deletePendingUploadByFileName(capture.fileName).then(updatePendingBadge);
+  }else if(capture.rawRecordId){
+    // Todavía no se había ni analizado ni subido: solo estaba guardada en
+    // crudo en el teléfono à la espera — basta con borrar ese registro.
+    deleteRawCapture(capture.rawRecordId);
   }
-  // Si todavía está en curso (ni "done" ni "queued"), runAutoUpload
-  // comprobará capture.discarded en cuanto termine y hará la limpieza sola.
+  // Si todavía está en curso (ni "done", ni "queued", ni con rawRecordId
+  // aún asignado), runAutoUpload comprobará capture.discarded en cuanto
+  // termine cada paso y hará la limpieza sola.
 }
 
 function slugify(text){
@@ -1355,6 +1405,11 @@ document.getElementById('btn-confirm').addEventListener('click', ()=>{
   resetToShutter();
 });
 
+// IDs de registros "en crudo" que ya se están procesando ahora mismo, para
+// no duplicar trabajo si, por ejemplo, resumePendingCaptures() se dispara
+// dos veces casi a la vez (al abrir la app y al recuperar conexión).
+const recordsBeingProcessed = new Set();
+
 async function runAutoUpload(capture, file, locationPromise){
   if(!sbConfig.url || !sbConfig.key){
     setCaptureStatus(capture, '⚠️ Falta conectar Supabase (⚙ ajustes)');
@@ -1365,22 +1420,72 @@ async function runAutoUpload(capture, file, locationPromise){
     if(capture.discarded) return;
 
     const locationInfo = await resolveLocationInfo();
-    const watermarkedFile = await addWatermark(file, locationInfo.label);
-    const fileName = buildFileName(locationInfo.street, file, capture.code);
-    capture.fileName = fileName;
-    if(capture.discarded) return; // se descartó antes de que hubiera nada que subir
+
+    // Punto clave: en cuanto se sabe la ubicación (o que no hay ubicación),
+    // la foto en crudo ya queda guardada de forma duradera en el teléfono
+    // (IndexedDB), ANTES de analizar el texto o subir nada. Así, si la
+    // persona cierra la app ahora mismo, nada se pierde: al reabrirla,
+    // resumePendingCaptures() retoma justo desde aquí.
+    let recordId;
+    try{
+      recordId = await saveRawCapture({
+        code: capture.code,
+        blob: file,
+        fileType: file.type || 'image/jpeg',
+        locationLabel: locationInfo.label,
+        locationStreet: locationInfo.street,
+        createdAt: Date.now()
+      });
+    }catch(e){
+      console.error('No se pudo pre-guardar la foto', e);
+      setCaptureStatus(capture, 'No se pudo guardar la foto en el teléfono');
+      return;
+    }
+    capture.rawRecordId = recordId;
+    if(capture.discarded){ await deleteRawCapture(recordId); return; }
+    setCaptureStatus(capture, '✓ Guardada en el teléfono — analizando…');
+
+    await processRawCaptureRecord({
+      id: recordId,
+      blob: file,
+      fileType: file.type || 'image/jpeg',
+      locationStreet: locationInfo.street,
+      code: capture.code
+    }, capture);
+  }catch(err){
+    console.error(err);
+    setCaptureStatus(capture, 'No se pudo procesar la foto');
+  }
+}
+
+// Hace el análisis de texto y la subida a Supabase de una foto ya
+// pre-guardada en crudo (record). `capture` es el objeto de la captura en
+// pantalla si esta foto se sigue viendo ahora mismo (para actualizar el
+// texto de estado), o null si se está retomando una foto de una sesión
+// anterior que ya no tiene nada visible en pantalla.
+async function processRawCaptureRecord(record, capture){
+  if(recordsBeingProcessed.has(record.id)) return;
+  recordsBeingProcessed.add(record.id);
+  try{
+    if(!sbConfig.url || !sbConfig.key) return; // se reintentará en el próximo resumePendingCaptures()
+    const file = new File([record.blob], 'foto.jpg', { type: record.fileType || 'image/jpeg' });
+    const watermarkedFile = await addWatermark(file, record.locationLabel);
+    const fileName = buildFileName(record.locationStreet, file, record.code);
+    if(capture) capture.fileName = fileName;
+    if(capture && capture.discarded){ await deleteRawCapture(record.id); return; }
 
     setCaptureStatus(capture, 'Analizando texto…');
     const extractedText = navigator.onLine ? await extractTextFromPhoto(file) : '';
-    if(capture.discarded) return;
+    if(capture && capture.discarded){ await deleteRawCapture(record.id); return; }
 
     setCaptureStatus(capture, 'Guardando en Supabase…');
 
     if(!navigator.onLine){
-      await queuePendingUpload(fileName, watermarkedFile);
+      await queuePendingUpload(fileName, watermarkedFile, extractedText);
       await updatePendingBadge();
-      capture.queued = true;
-      if(capture.discarded){ await deletePendingUploadByFileName(fileName); await updatePendingBadge(); return; }
+      await deleteRawCapture(record.id);
+      if(capture) capture.queued = true;
+      if(capture && capture.discarded){ await deletePendingUploadByFileName(fileName); await updatePendingBadge(); return; }
       setCaptureStatus(capture, '📴 Guardada en el teléfono, se subirá sola con internet');
       return;
     }
@@ -1388,29 +1493,50 @@ async function runAutoUpload(capture, file, locationPromise){
     try{
       const url = await uploadToSupabase(watermarkedFile, sbConfig, fileName);
       await saveExtractedText(fileName, extractedText);
-      capture.uploadedUrl = url;
-      capture.done = true;
-      if(capture.discarded){ await deleteFromSupabase(fileName); return; }
+      await deleteRawCapture(record.id);
+      if(capture){ capture.uploadedUrl = url; capture.done = true; }
+      if(capture && capture.discarded){ await deleteFromSupabase(fileName); return; }
 
       recentPhotos.unshift(url);
       recentPhotos = recentPhotos.slice(0,9);
       await saveRecentPhotos();
-      document.getElementById('last-url').href = url;
-      document.getElementById('success-badge').style.display = 'flex';
+      if(capture){
+        document.getElementById('last-url').href = url;
+        document.getElementById('success-badge').style.display = 'flex';
+      }
       renderGallery();
       setCaptureStatus(capture, '✓ Guardada en Supabase');
     }catch(uploadErr){
       // Falló la subida aunque parecía haber conexión (red inestable, etc.)
       console.error(uploadErr);
-      await queuePendingUpload(fileName, watermarkedFile);
+      await queuePendingUpload(fileName, watermarkedFile, extractedText);
       await updatePendingBadge();
-      capture.queued = true;
-      if(capture.discarded){ await deletePendingUploadByFileName(fileName); await updatePendingBadge(); return; }
+      await deleteRawCapture(record.id);
+      if(capture) capture.queued = true;
+      if(capture && capture.discarded){ await deletePendingUploadByFileName(fileName); await updatePendingBadge(); return; }
       setCaptureStatus(capture, '📴 No se pudo subir ahora, se reintentará sola');
     }
   }catch(err){
     console.error(err);
     setCaptureStatus(capture, 'No se pudo procesar la foto');
+    // Se deja el registro en crudo tal cual en IndexedDB: no se pierde nada
+    // y se reintentará en el próximo resumePendingCaptures() (al reabrir la
+    // app, recuperar conexión, o cada par de minutos).
+  }finally{
+    recordsBeingProcessed.delete(record.id);
+  }
+}
+
+// Retoma cualquier foto que quedó guardada en crudo (ubicación ya resuelta,
+// pero sin terminar el análisis de texto ni la subida) — típicamente porque
+// la app se cerró justo después de tomar la foto. Se llama al abrir la app,
+// al volver a primer plano, al recuperar conexión, y cada par de minutos.
+async function resumePendingCaptures(){
+  if(!sbConfig.url || !sbConfig.key) return;
+  let records;
+  try{ records = await getRawCaptures(); }catch(e){ return; }
+  for(const record of records){
+    await processRawCaptureRecord(record, null);
   }
 }
 
@@ -1580,6 +1706,7 @@ async function init(){
   }
   setupReminders();
   trySyncPendingUploads();
+  resumePendingCaptures();
   if(userName && sbConfig.url && sbConfig.key){
     await registerSelfInPermissions();
     await refreshCanFollow();
