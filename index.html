@@ -1248,12 +1248,37 @@ function loadTesseract(){
   });
 }
 
-const OCR_TIMEOUT_MS = 10000; // límite de tiempo para el análisis de texto
+const OCR_TIMEOUT_MS = 15000; // límite de tiempo para el análisis de texto
+const OCR_MAX_DIMENSION = 1800; // ancho/alto máximo de la imagen que se le pasa al OCR
+
+// Las fotos que salen directo de la cámara del móvil pueden pesar varios MB
+// a resolución completa (4000px+ de lado) — Tesseract tarda mucho más en
+// procesarlas y, en un móvil, muchas veces no llega a terminar antes del
+// límite de tiempo (por eso el texto detectado salía vacío o a medias en
+// fotos tomadas desde el teléfono, mientras que una imagen ya pequeña,
+// como la que se sube desde el ordenador, sí se leía bien). Para el OCR
+// basta con una copia más pequeña: se reduce aquí sin tocar la foto
+// original que se sube a Supabase (esa conserva toda su resolución).
+function resizeForOCR(file){
+  return loadImageFromFile(file).then((img)=>{
+    const scale = Math.min(1, OCR_MAX_DIMENSION / Math.max(img.naturalWidth, img.naturalHeight));
+    if(scale >= 1) return file; // ya es suficientemente pequeña
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return new Promise((resolve)=>{
+      canvas.toBlob((blob)=> resolve(blob ? new File([blob], 'ocr.jpg', { type:'image/jpeg' }) : file), 'image/jpeg', 0.85);
+    });
+  }).catch(()=> file); // si algo falla, se sigue con la original tal cual
+}
 
 async function extractTextFromPhoto(file){
   try{
     await loadTesseract();
-    const recognizePromise = Tesseract.recognize(file, 'eng')
+    const smallFile = await resizeForOCR(file);
+    const recognizePromise = Tesseract.recognize(smallFile, 'eng')
       .then(result => (result && result.data && result.data.text) ? result.data.text : '');
     const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(''), OCR_TIMEOUT_MS));
     return await Promise.race([recognizePromise, timeoutPromise]);
