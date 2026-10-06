@@ -451,11 +451,11 @@ function openOfflineDB(){
   });
 }
 
-async function queuePendingUpload(fileName, blob, extractedText){
+async function queuePendingUpload(fileName, blob, extractedText, pedidoCompra){
   const db = await openOfflineDB();
   return new Promise((resolve, reject)=>{
     const tx = db.transaction(OFFLINE_STORE_NAME, 'readwrite');
-    tx.objectStore(OFFLINE_STORE_NAME).add({ fileName, blob, extractedText: extractedText || '', createdAt: Date.now() });
+    tx.objectStore(OFFLINE_STORE_NAME).add({ fileName, blob, extractedText: extractedText || '', pedidoCompra: pedidoCompra || null, createdAt: Date.now() });
     tx.oncomplete = ()=> resolve();
     tx.onerror = ()=> reject(tx.error);
   });
@@ -545,7 +545,7 @@ async function trySyncPendingUploads(){
     for(const item of pending){
       try{
         const url = await uploadToSupabase(item.blob, sbConfig, item.fileName);
-        if(item.extractedText) await saveExtractedText(item.fileName, item.extractedText);
+        if(item.extractedText) await saveExtractedText(item.fileName, item.extractedText, item.pedidoCompra);
         await deletePendingUpload(item.id);
         recentPhotos.unshift(url);
         recentPhotos = recentPhotos.slice(0,9);
@@ -1263,7 +1263,39 @@ async function extractTextFromPhoto(file){
   }
 }
 
-async function saveExtractedText(fileName, text){
+// Detecta el número de pedido de compra (formato "PC" + año de 2 dígitos +
+// 5 dígitos, ej. PC2609220) dentro del texto que reconoció el OCR. Los
+// albaranes de Saltoki no imprimen el prefijo "PC", así que si no aparece
+// con el prefijo se busca también un número suelto de 7 dígitos que
+// empiece por un año plausible (el actual o el anterior), y se le añade
+// el prefijo "PC" para que quede igual de identificable que el resto.
+function extractOrderNumber(text){
+  if(!text) return null;
+  const clean = text.toUpperCase();
+
+  // Caso normal: el propio texto trae "PC" seguido del número (tolera
+  // algún espacio o guion suelto que el OCR a veces mete de más).
+  const withPrefix = clean.match(/PC[\s-]?(\d{2})[\s-]?(\d{5})\b/);
+  if(withPrefix) return `PC${withPrefix[1]}${withPrefix[2]}`;
+
+  // Caso Saltoki: el albarán no trae "PC", solo el número suelto. Para no
+  // confundirlo con cualquier otro número de 7 cifras del albarán (precios,
+  // cantidades, códigos de producto...), solo se acepta si empieza por el
+  // año actual o el anterior (para los primeros días de un año nuevo, por
+  // si todavía llegan albaranes de pedidos hechos el año anterior).
+  try{
+    const now = new Date();
+    const yearPrefixes = [now.getFullYear() % 100, (now.getFullYear() - 1) % 100]
+      .map(y => String(y).padStart(2,'0'));
+    const bareNumbers = clean.match(/(?<!\d)(\d{7})(?!\d)/g) || [];
+    const match = bareNumbers.find(n => yearPrefixes.includes(n.slice(0,2)));
+    if(match) return `PC${match}`;
+  }catch(e){ /* navegador sin soporte de lookbehind: se queda sin este caso especial */ }
+
+  return null;
+}
+
+async function saveExtractedText(fileName, text, pedidoCompra){
   if(!sbConfig.url || !sbConfig.key || !text) return;
   try{
     await fetch(`${sbConfig.url}/rest/v1/photo_ocr?on_conflict=file_name`, {
@@ -1274,7 +1306,7 @@ async function saveExtractedText(fileName, text){
         'Content-Type': 'application/json',
         'Prefer': 'resolution=merge-duplicates,return=minimal'
       },
-      body: JSON.stringify({ file_name: fileName, extracted_text: text })
+      body: JSON.stringify({ file_name: fileName, extracted_text: text, pedido_compra: pedidoCompra || null })
     });
   }catch(e){ /* sin conexión: esta foto simplemente no quedará indexada para palabras clave */ }
 }
@@ -1491,12 +1523,13 @@ async function processRawCaptureRecord(record, capture){
 
     setCaptureStatus(capture, 'Analizando texto…');
     const extractedText = navigator.onLine ? await extractTextFromPhoto(file) : '';
+    const pedidoCompra = extractOrderNumber(extractedText);
     if(capture && capture.discarded){ await deleteRawCapture(record.id); return; }
 
     setCaptureStatus(capture, 'Guardando en Supabase…');
 
     if(!navigator.onLine){
-      await queuePendingUpload(fileName, watermarkedFile, extractedText);
+      await queuePendingUpload(fileName, watermarkedFile, extractedText, pedidoCompra);
       await updatePendingBadge();
       await deleteRawCapture(record.id);
       if(capture) capture.queued = true;
@@ -1507,7 +1540,7 @@ async function processRawCaptureRecord(record, capture){
 
     try{
       const url = await uploadToSupabase(watermarkedFile, sbConfig, fileName);
-      await saveExtractedText(fileName, extractedText);
+      await saveExtractedText(fileName, extractedText, pedidoCompra);
       await deleteRawCapture(record.id);
       if(capture){ capture.uploadedUrl = url; capture.done = true; }
       if(capture && capture.discarded){ await deleteFromSupabase(fileName); return; }
@@ -1520,11 +1553,11 @@ async function processRawCaptureRecord(record, capture){
         document.getElementById('success-badge').style.display = 'flex';
       }
       renderGallery();
-      setCaptureStatus(capture, '✓ Guardada en Supabase');
+      setCaptureStatus(capture, pedidoCompra ? `✓ Guardada en Supabase · Pedido ${pedidoCompra}` : '✓ Guardada en Supabase');
     }catch(uploadErr){
       // Falló la subida aunque parecía haber conexión (red inestable, etc.)
       console.error(uploadErr);
-      await queuePendingUpload(fileName, watermarkedFile, extractedText);
+      await queuePendingUpload(fileName, watermarkedFile, extractedText, pedidoCompra);
       await updatePendingBadge();
       await deleteRawCapture(record.id);
       if(capture) capture.queued = true;
