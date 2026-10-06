@@ -545,7 +545,7 @@ async function trySyncPendingUploads(){
     for(const item of pending){
       try{
         const url = await uploadToSupabase(item.blob, sbConfig, item.fileName);
-        if(item.extractedText) await saveExtractedText(item.fileName, item.extractedText, item.pedidoCompra);
+        await saveExtractedText(item.fileName, item.extractedText, item.pedidoCompra);
         await deletePendingUpload(item.id);
         recentPhotos.unshift(url);
         recentPhotos = recentPhotos.slice(0,9);
@@ -1296,7 +1296,10 @@ function extractOrderNumber(text){
 }
 
 async function saveExtractedText(fileName, text, pedidoCompra){
-  if(!sbConfig.url || !sbConfig.key || !text) return;
+  // Se guarda una fila por cada foto subida, aunque el OCR no haya
+  // encontrado texto (foto borrosa, poca luz, etc.) — así "Pedido compra"
+  // queda en blanco en vez de faltar directamente la fila en la tabla.
+  if(!sbConfig.url || !sbConfig.key || !fileName) return;
   try{
     await fetch(`${sbConfig.url}/rest/v1/photo_ocr?on_conflict=file_name`, {
       method:'POST',
