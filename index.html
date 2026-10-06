@@ -411,10 +411,14 @@ const localStore = {
 };
 
 let sbConfig = {
-  url:'https://vcobotpsaaevumkkramh.supabase.co',
-  key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZjb2JvdHBzYWFldnVta2tyYW1oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY0NjAyODYsImV4cCI6MjA4MjAzNjI4Nn0.d4EwMpnr-jSQMrE__m9zi-oJ2F3tx7re2sA1CyUUY7Y',
+  url:'https://oappnsquhmgccjnlistx.supabase.co',
+  key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9hcHBuc3F1aG1nY2Nqbmxpc3R4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg0MzE4NzUsImV4cCI6MjEwNDAwNzg3NX0.9HfLeP-Oz27qBW5OS3aMxh2edzXi6zaurImm4egKn8I',
   bucket:'Fotos albaranes'
 };
+// Proyecto antiguo de Supabase ("Portal Tecmelec") — se usa solo para
+// detectar y migrar automáticamente los teléfonos que ya tenían guardada
+// esta configuración antigua en su almacenamiento local (ver loadConfig()).
+const OLD_SB_PROJECT_URL = 'https://vcobotpsaaevumkkramh.supabase.co';
 let currentFile = null;
 let currentUrl = null;
 let currentLocation = null;
@@ -593,6 +597,17 @@ async function loadConfig(){
   try{
     const res = await localStore.get('sbConfig');
     if(res && res.value) sbConfig = JSON.parse(res.value);
+    // Migración automática: los teléfonos que ya tenían guardado el
+    // proyecto antiguo de Supabase pasan solos al nuevo (Portal Compras),
+    // sin que nadie tenga que entrar a Ajustes a cambiar nada a mano.
+    if(sbConfig && sbConfig.url === OLD_SB_PROJECT_URL){
+      sbConfig = {
+        url:'https://oappnsquhmgccjnlistx.supabase.co',
+        key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9hcHBuc3F1aG1nY2Nqbmxpc3R4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg0MzE4NzUsImV4cCI6MjEwNDAwNzg3NX0.9HfLeP-Oz27qBW5OS3aMxh2edzXi6zaurImm4egKn8I',
+        bucket:'Fotos albaranes'
+      };
+      await saveConfig();
+    }
   }catch(e){}
   try{
     const res2 = await localStore.get('recentPhotos');
