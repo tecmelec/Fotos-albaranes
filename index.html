@@ -1853,9 +1853,15 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').then((reg)=>{
       // Fuerza a comprobar si hay una versión nueva en cuanto se abre la
       // app (y no solo cuando el navegador decide hacerlo por su cuenta),
-      // para que cambios como el de a qué proyecto de Supabase apunta la
-      // app lleguen al teléfono sin tener que cerrarla varias veces.
+      // para que los cambios lleguen al teléfono sin tener que cerrar la
+      // app varias veces. Se repite al volver a primer plano y cada pocos
+      // minutos mientras esté abierta, por si la primera comprobación
+      // coincide con mala cobertura o el navegador la ignora esa vez.
       reg.update().catch(()=>{});
+      document.addEventListener('visibilitychange', ()=>{
+        if(document.visibilityState === 'visible') reg.update().catch(()=>{});
+      });
+      setInterval(()=> reg.update().catch(()=>{}), 5 * 60 * 1000);
     }).catch(()=>{});
   });
   // En cuanto el Service Worker nuevo toma el control, recarga la página

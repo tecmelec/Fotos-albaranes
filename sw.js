@@ -1,4 +1,4 @@
-const CACHE_NAME = 'disparo-cache-v3';
+const CACHE_NAME = 'disparo-cache-v4';
 const SHELL_FILES = ['./index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -25,9 +25,15 @@ self.addEventListener('fetch', (event) => {
   }
   // Network-first: always try to get the freshest version of the app shell
   // when online, so future updates show up immediately. Falls back to the
-  // cached copy only when offline.
+  // cached copy only when offline. cache:'no-store' además evita que el
+  // propio navegador (su caché HTTP normal, aparte de la Cache API que
+  // maneja este Service Worker) devuelva una copia antigua de index.html
+  // sin ni siquiera llegar a preguntarle al servidor — algo que se vio en
+  // teléfonos ya instalados mientras el mismo cambio sí llegaba enseguida
+  // desde el ordenador.
+  const freshRequest = new Request(event.request, { cache: 'no-store' });
   event.respondWith(
-    fetch(event.request)
+    fetch(freshRequest)
       .then((response) => {
         const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
