@@ -1814,7 +1814,22 @@ async function fireReminderNotification(){
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(()=>{});
+    navigator.serviceWorker.register('./sw.js').then((reg)=>{
+      // Fuerza a comprobar si hay una versión nueva en cuanto se abre la
+      // app (y no solo cuando el navegador decide hacerlo por su cuenta),
+      // para que cambios como el de a qué proyecto de Supabase apunta la
+      // app lleguen al teléfono sin tener que cerrarla varias veces.
+      reg.update().catch(()=>{});
+    }).catch(()=>{});
+  });
+  // En cuanto el Service Worker nuevo toma el control, recarga la página
+  // una vez sola para que todo (incluida la configuración embebida en
+  // index.html) quede servido desde la versión más reciente.
+  let swReloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+    if(swReloaded) return;
+    swReloaded = true;
+    window.location.reload();
   });
   navigator.serviceWorker.addEventListener('message', async (event)=>{
     if(event.data && event.data.type === 'navigate' && event.data.screen === 'activity'){
