@@ -1255,6 +1255,11 @@ function loadTesseract(){
 // Valor que se guarda siempre en la columna pedido_compra de cada foto nueva.
 const PEDIDO_COMPRA_DEFECTO = 'Sin asignar';
 
+// El texto de las fotos se analiza ahora de forma externa, así que el OCR del
+// móvil está desactivado (la subida es más rápida y no se descarga Tesseract).
+// Para volver a activarlo basta con poner OCR_ENABLED = true.
+const OCR_ENABLED = false;
+
 const OCR_TIMEOUT_MS = 15000; // límite de tiempo para el análisis de texto
 const OCR_MAX_DIMENSION = 1800; // ancho/alto máximo de la imagen que se le pasa al OCR
 
@@ -1525,7 +1530,7 @@ async function runAutoUpload(capture, file, locationPromise){
     }
     capture.rawRecordId = recordId;
     if(capture.discarded){ await deleteRawCapture(recordId); return; }
-    setCaptureStatus(capture, '✓ Guardada en el teléfono — analizando…');
+    setCaptureStatus(capture, '✓ Guardada en el teléfono — subiendo…');
 
     await processRawCaptureRecord({
       id: recordId,
@@ -1556,8 +1561,11 @@ async function processRawCaptureRecord(record, capture){
     if(capture) capture.fileName = fileName;
     if(capture && capture.discarded){ await deleteRawCapture(record.id); return; }
 
-    setCaptureStatus(capture, 'Analizando texto…');
-    const extractedText = navigator.onLine ? await extractTextFromPhoto(file) : '';
+    let extractedText = '';
+    if(OCR_ENABLED){
+      setCaptureStatus(capture, 'Analizando texto…');
+      extractedText = navigator.onLine ? await extractTextFromPhoto(file) : '';
+    }
     const pedidoCompra = PEDIDO_COMPRA_DEFECTO; // el pedido ya no se detecta por OCR: se asigna después
     if(capture && capture.discarded){ await deleteRawCapture(record.id); return; }
 
