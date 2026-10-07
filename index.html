@@ -454,7 +454,7 @@ async function queuePendingUpload(fileName, blob, extractedText, pedidoCompra){
   const db = await openOfflineDB();
   return new Promise((resolve, reject)=>{
     const tx = db.transaction(OFFLINE_STORE_NAME, 'readwrite');
-    tx.objectStore(OFFLINE_STORE_NAME).add({ fileName, blob, extractedText: extractedText || '', pedidoCompra: pedidoCompra || null, createdAt: Date.now() });
+    tx.objectStore(OFFLINE_STORE_NAME).add({ fileName, blob, extractedText: extractedText || '', pedidoCompra: pedidoCompra || PEDIDO_COMPRA_DEFECTO, createdAt: Date.now() });
     tx.oncomplete = ()=> resolve();
     tx.onerror = ()=> reject(tx.error);
   });
@@ -1252,6 +1252,9 @@ function loadTesseract(){
   });
 }
 
+// Valor que se guarda siempre en la columna pedido_compra de cada foto nueva.
+const PEDIDO_COMPRA_DEFECTO = 'Sin asignar';
+
 const OCR_TIMEOUT_MS = 15000; // límite de tiempo para el análisis de texto
 const OCR_MAX_DIMENSION = 1800; // ancho/alto máximo de la imagen que se le pasa al OCR
 
@@ -1338,7 +1341,7 @@ async function saveExtractedText(fileName, text, pedidoCompra){
         'Content-Type': 'application/json',
         'Prefer': 'resolution=merge-duplicates,return=minimal'
       },
-      body: JSON.stringify({ file_name: fileName, extracted_text: text, pedido_compra: pedidoCompra || null })
+      body: JSON.stringify({ file_name: fileName, extracted_text: text, pedido_compra: pedidoCompra || PEDIDO_COMPRA_DEFECTO })
     });
   }catch(e){ /* sin conexión: esta foto simplemente no quedará indexada para palabras clave */ }
 }
@@ -1555,7 +1558,7 @@ async function processRawCaptureRecord(record, capture){
 
     setCaptureStatus(capture, 'Analizando texto…');
     const extractedText = navigator.onLine ? await extractTextFromPhoto(file) : '';
-    const pedidoCompra = extractOrderNumber(extractedText);
+    const pedidoCompra = PEDIDO_COMPRA_DEFECTO; // el pedido ya no se detecta por OCR: se asigna después
     if(capture && capture.discarded){ await deleteRawCapture(record.id); return; }
 
     setCaptureStatus(capture, 'Guardando en Supabase…');
@@ -1585,7 +1588,7 @@ async function processRawCaptureRecord(record, capture){
         document.getElementById('success-badge').style.display = 'flex';
       }
       renderGallery();
-      setCaptureStatus(capture, pedidoCompra ? `✓ Guardada en Supabase · Pedido ${pedidoCompra}` : '✓ Guardada en Supabase');
+      setCaptureStatus(capture, '✓ Guardada en Supabase');
     }catch(uploadErr){
       // Falló la subida aunque parecía haber conexión (red inestable, etc.)
       console.error(uploadErr);
