@@ -421,7 +421,6 @@ let sbConfig = {
 const OLD_SB_PROJECT_URL = 'https://vcobotpsaaevumkkramh.supabase.co';
 let currentFile = null;
 let currentUrl = null;
-let currentLocation = null;
 let currentPhotoCode = null;
 let isSyncingQueue = false;
 let captureGeneration = 0;
@@ -778,7 +777,6 @@ document.getElementById('camera-input').addEventListener('change', (e)=>{
   activeCapture = capture;
   setCaptureStatus(capture, 'Guardando automáticamente…');
 
-  currentLocation = null;
   document.getElementById('location-status').style.display = 'none';
   document.getElementById('btn-confirm').disabled = false;
   document.getElementById('btn-confirm').style.opacity = '1';
@@ -801,28 +799,34 @@ function setCaptureStatus(capture, text){
   if(el) el.textContent = text;
 }
 
+// Devuelve directamente las coordenadas de ESTA captura (o null si no hay),
+// en vez de dejarlas en una variable global — antes, si la persona tomaba
+// una foto nueva mientras la anterior todavía no había llegado a leer la
+// ubicación, esa variable global ya se había sobrescrito (o puesto a null)
+// con los datos de la segunda foto, y la primera se quedaba sin dirección
+// en la marca de agua y en el nombre de archivo aunque el GPS sí hubiera
+// respondido a tiempo. Al devolver las coordenadas en la propia promesa,
+// cada foto lleva las suyas aunque se solapen varias a la vez.
 function requestLocation(){
   return new Promise((resolve)=>{
     if(!navigator.geolocation){
       showLocationStatus('Este navegador no soporta ubicación', true);
-      resolve();
+      resolve(null);
       return;
     }
     showLocationStatus('Obteniendo ubicación…', false);
     navigator.geolocation.getCurrentPosition(
       (pos)=>{
-        currentLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
         showLocationStatus('📍 Ubicación lista', false);
-        resolve();
+        resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude });
       },
       (err)=>{
-        currentLocation = null;
         let msg = 'Ubicación no disponible — se guardará sin ella';
         if(err && err.code === 1) msg = 'Permiso de ubicación bloqueado — se guardará sin ella';
         if(err && err.code === 2) msg = 'Sin señal GPS — se guardará sin ubicación';
         if(err && err.code === 3) msg = 'Tardó demasiado — se guardará sin ubicación';
         showLocationStatus(msg, true);
-        resolve();
+        resolve(null);
       },
       { enableHighAccuracy:true, timeout:15000, maximumAge:60000 }
     );
@@ -836,9 +840,9 @@ function showLocationStatus(text, isWarning){
   el.style.display = 'block';
 }
 
-async function resolveLocationInfo(){
-  if(!currentLocation) return { label:null, street:null };
-  const { lat, lon } = currentLocation;
+async function resolveLocationInfo(coords){
+  if(!coords) return { label:null, street:null };
+  const { lat, lon } = coords;
   const coordsText = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
   try{
     const controller = new AbortController();
@@ -1491,10 +1495,10 @@ async function runAutoUpload(capture, file, locationPromise){
     return;
   }
   try{
-    await locationPromise; // espera a que el GPS responda o falle, lo que pase antes
+    const coords = await locationPromise; // espera a que el GPS responda o falle, lo que pase antes
     if(capture.discarded) return;
 
-    const locationInfo = await resolveLocationInfo();
+    const locationInfo = await resolveLocationInfo(coords);
 
     // Punto clave: en cuanto se sabe la ubicación (o que no hay ubicación),
     // la foto en crudo ya queda guardada de forma duradera en el teléfono
