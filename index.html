@@ -1536,6 +1536,7 @@ async function runAutoUpload(capture, file, locationPromise){
       id: recordId,
       blob: file,
       fileType: file.type || 'image/jpeg',
+      locationLabel: locationInfo.label,
       locationStreet: locationInfo.street,
       code: capture.code
     }, capture);
