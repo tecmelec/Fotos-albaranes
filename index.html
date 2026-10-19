@@ -136,10 +136,24 @@
   .btn-primary:active{filter:brightness(0.92);}
   .btn-ghost{background:var(--card-2); color:var(--text); border:1px solid var(--line);}
   .btn-ghost:active{background:var(--card);}
+  .btn:disabled{opacity:.45; cursor:default;}
   .btn-back-link{
     background:none;border:none;color:var(--text-dim);font-size:13px;
     margin-bottom:16px;cursor:pointer;padding:0;text-align:left;
   }
+
+  /* Filas de listas (panel de supervisor, seguir, palabras clave) */
+  .contact-row{
+    display:flex; align-items:center; gap:12px;
+    background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:10px 14px; margin-bottom:8px;
+  }
+  .contact-row .avatar{
+    width:34px; height:34px; border-radius:50%; background:var(--card-2);
+    display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0;
+  }
+  .contact-row .who .n{font-size:14.5px; font-weight:600;}
+  .contact-row .del{background:none; border:none; color:var(--text-dim); font-size:16px; cursor:pointer;}
 
   /* Gallery of saved photos */
   .gallery-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin:22px 0 10px 0;}
@@ -365,6 +379,13 @@
     <div class="screen" id="screen-admin">
       <button class="btn-back-link" id="btn-back-from-admin">‹ Volver</button>
       <div class="step-label">Panel de supervisor</div>
+
+      <div style="background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin:6px 0 26px 0;">
+        <div style="font-size:16px; font-weight:700; margin-bottom:4px;">Fotos nuevas</div>
+        <div class="hint" id="dl-status" style="text-align:left; margin:0 0 12px 0;">Comprobando…</div>
+        <button class="btn btn-primary" id="btn-download-new" style="width:100%;" disabled>⬇ Descargar fotos nuevas</button>
+      </div>
+
       <div class="step-title" style="font-size:19px; margin-bottom:6px;">Permisos de "a quién sigo"</div>
       <div class="hint" style="text-align:left; margin-top:0; margin-bottom:16px;">
         Marca a quién le permites usar la función de seguir a compañeros. Por defecto, los usuarios nuevos no tienen acceso.
@@ -993,6 +1014,7 @@ async function tryAdminPassword(){
   if(hash === ADMIN_PASSWORD_HASH){
     document.getElementById('admin-pw-modal').style.display = 'none';
     show('admin');
+    refreshDownloadStatus();
     await renderAdminList();
   }else{
     document.getElementById('admin-pw-error').style.display = 'block';
@@ -1057,6 +1079,176 @@ document.getElementById('btn-save-admin').addEventListener('click', async ()=>{
   }
   toast(ok ? 'Permisos guardados' : 'Algunos cambios no se pudieron guardar, revisa tu conexión');
   refreshCanFollow();
+});
+
+// ---------- Descargar fotos nuevas (panel de supervisor) ----------
+// Compara todas las fotos del bucket con la tabla fotos_descargadas y baja
+// solo las que faltan, en un único .zip. Se marcan como descargadas solo
+// después de generar el zip, así que si algo falla no se pierde ninguna.
+
+const DOWNLOAD_BATCH_MAX = 150; // máximo de fotos por zip (para no agotar la memoria del navegador)
+let pendingDownloads = [];
+let isDownloading = false;
+
+function sbHeaders(extra){
+  return Object.assign({ 'apikey': sbConfig.key, 'Authorization': `Bearer ${sbConfig.key}` }, extra || {});
+}
+
+let jszipLoaded = false;
+function loadJSZip(){
+  return new Promise((resolve, reject)=>{
+    if(jszipLoaded && window.JSZip){ resolve(); return; }
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    script.onload = ()=>{ jszipLoaded = true; resolve(); };
+    script.onerror = ()=> reject(new Error('No se pudo cargar JSZip'));
+    document.head.appendChild(script);
+  });
+}
+
+async function listAllBucketObjects(){
+  const all = [];
+  const pageSize = 1000;
+  let offset = 0;
+  while(true){
+    const res = await fetch(`${sbConfig.url}/storage/v1/object/list/${encodeURIComponent(sbConfig.bucket)}`, {
+      method:'POST',
+      headers: sbHeaders({ 'Content-Type':'application/json' }),
+      body: JSON.stringify({ prefix:'', limit:pageSize, offset, sortBy:{ column:'created_at', order:'asc' } })
+    });
+    if(!res.ok) throw new Error('list failed ' + res.status);
+    const page = await res.json();
+    all.push(...page.filter(o => o.id && o.name !== '.emptyFolderPlaceholder'));
+    if(page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+async function getDownloadedNames(){
+  const names = new Set();
+  const pageSize = 1000;
+  let offset = 0;
+  while(true){
+    const res = await fetch(`${sbConfig.url}/rest/v1/fotos_descargadas?select=nombre&order=nombre.asc&limit=${pageSize}&offset=${offset}`, {
+      headers: sbHeaders()
+    });
+    if(!res.ok) throw new Error('fotos_descargadas ' + res.status);
+    const rows = await res.json();
+    rows.forEach(r => names.add(r.nombre));
+    if(rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  return names;
+}
+
+async function markAsDownloaded(names){
+  for(let i = 0; i < names.length; i += 500){
+    const chunk = names.slice(i, i + 500).map(nombre => ({ nombre }));
+    const res = await fetch(`${sbConfig.url}/rest/v1/fotos_descargadas?on_conflict=nombre`, {
+      method:'POST',
+      headers: sbHeaders({ 'Content-Type':'application/json', 'Prefer':'resolution=ignore-duplicates,return=minimal' }),
+      body: JSON.stringify(chunk)
+    });
+    if(!res.ok) throw new Error('mark failed ' + res.status);
+  }
+}
+
+async function refreshDownloadStatus(){
+  const status = document.getElementById('dl-status');
+  const btn = document.getElementById('btn-download-new');
+  if(isDownloading) return;
+  btn.disabled = true;
+  btn.textContent = '⬇ Descargar fotos nuevas';
+  status.style.color = 'var(--text-dim)';
+  status.textContent = 'Comprobando…';
+  if(!sbConfig.url || !sbConfig.key){
+    status.textContent = 'Primero conecta Supabase en ⚙ ajustes.';
+    return;
+  }
+  try{
+    const [objects, done] = await Promise.all([listAllBucketObjects(), getDownloadedNames()]);
+    pendingDownloads = objects.filter(o => !done.has(o.name));
+  }catch(e){
+    status.style.color = 'var(--danger)';
+    status.textContent = String(e.message).includes('fotos_descargadas')
+      ? 'Falta crear la tabla fotos_descargadas en Supabase.'
+      : 'No se pudo comprobar. Revisa tu conexión.';
+    return;
+  }
+  const n = pendingDownloads.length;
+  if(!n){
+    status.textContent = 'No hay fotos nuevas. Todo está descargado.';
+    return;
+  }
+  const batch = Math.min(n, DOWNLOAD_BATCH_MAX);
+  status.textContent = n === 1 ? '1 foto sin descargar.' : `${n} fotos sin descargar.`;
+  if(n > DOWNLOAD_BATCH_MAX) status.textContent += ` Se bajan de ${DOWNLOAD_BATCH_MAX} en ${DOWNLOAD_BATCH_MAX}, empezando por las más antiguas.`;
+  btn.textContent = batch === 1 ? '⬇ Descargar 1 foto nueva' : `⬇ Descargar ${batch} fotos nuevas`;
+  btn.disabled = false;
+}
+
+function zipStamp(){
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
+}
+
+document.getElementById('btn-download-new').addEventListener('click', async ()=>{
+  if(isDownloading || !pendingDownloads.length) return;
+  isDownloading = true;
+  const btn = document.getElementById('btn-download-new');
+  const status = document.getElementById('dl-status');
+  btn.disabled = true;
+  const batch = pendingDownloads.slice(0, DOWNLOAD_BATCH_MAX);
+  try{
+    status.textContent = 'Preparando…';
+    await loadJSZip();
+    const zip = new JSZip();
+    const ok = [];
+    let failed = 0;
+    let count = 0;
+    const queue = [...batch];
+    async function worker(){
+      while(queue.length){
+        const o = queue.shift();
+        try{
+          const r = await fetch(publicUrlFor(o.name), { cache:'no-store' });
+          if(!r.ok) throw new Error(r.status);
+          zip.file(o.name, await r.blob());
+          ok.push(o.name);
+        }catch(e){ failed++; }
+        count++;
+        status.textContent = `Descargando ${count} de ${batch.length}…`;
+      }
+    }
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    if(!ok.length) throw new Error('ninguna foto descargada');
+
+    status.textContent = 'Creando el archivo .zip…';
+    const blob = await zip.generateAsync({ type:'blob', compression:'STORE' }); // las JPG no se comprimen más
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `albaranes_${zipStamp()}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=> URL.revokeObjectURL(a.href), 60 * 1000);
+
+    try{
+      await markAsDownloaded(ok);
+      toast(failed
+        ? `${ok.length} fotos descargadas · ${failed} fallaron (saldrán la próxima vez)`
+        : `${ok.length} fotos descargadas`);
+    }catch(e){
+      toast('El zip se descargó, pero no se pudieron marcar. La próxima vez volverán a salir.');
+    }
+  }catch(e){
+    console.error(e);
+    toast('No se pudo completar la descarga. Inténtalo de nuevo.');
+  }
+  isDownloading = false;
+  await refreshDownloadStatus();
 });
 
 // ---------- "A quién sigo" ----------
