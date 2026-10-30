@@ -1859,12 +1859,23 @@ function truncateToWidth(ctx, text, maxWidth){
   return low > 0 ? text.slice(0, low) + '…' : '…';
 }
 
+// Tamaño y calidad de las fotos que se suben a Supabase. Las fotos de la
+// cámara del móvil salen a 4000px+ y 1–2 MB; reducidas a 1.800px de lado
+// mayor y JPEG al 80 % ocupan unas 3–4 veces menos y el albarán se sigue
+// leyendo bien. La marca de agua se dibuja después, a escala de la foto ya
+// reducida, así que mantiene su tamaño relativo.
+const PHOTO_MAX_DIMENSION = 1800;
+const PHOTO_JPEG_QUALITY = 0.80;
+
 async function addWatermark(file, locationLabel){
   const img = await loadImageFromFile(file);
+  const scale = Math.min(1, PHOTO_MAX_DIMENSION / Math.max(img.naturalWidth, img.naturalHeight));
   const canvas = document.createElement('canvas');
-  canvas.width = img.naturalWidth;
-  canvas.height = img.naturalHeight;
+  canvas.width = Math.round(img.naturalWidth * scale);
+  canvas.height = Math.round(img.naturalHeight * scale);
   const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
   const now = new Date();
@@ -1906,7 +1917,7 @@ async function addWatermark(file, locationLabel){
   return new Promise((resolve)=>{
     canvas.toBlob((blob)=>{
       resolve(new File([blob], file.name || 'foto.jpg', { type: 'image/jpeg' }));
-    }, 'image/jpeg', 0.92);
+    }, 'image/jpeg', PHOTO_JPEG_QUALITY);
   });
 }
 
